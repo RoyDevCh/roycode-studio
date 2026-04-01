@@ -1,6 +1,6 @@
 import path from 'node:path'
 import ts from 'typescript'
-import { readWorkspaceFile, resolveWorkspacePath } from './filesystem.js'
+import { readWorkspaceFile, resolveWorkspacePath, toWorkspaceRelative } from './filesystem.js'
 import type { AccessMode } from './types.js'
 
 export type LspLocation = {
@@ -46,6 +46,20 @@ export type LspRenamePreview = {
       newText?: string
     }
   >
+}
+
+export type LspRenameFileEdit = {
+  path: string
+  occurrences: number
+  originalContent: string
+  updatedContent: string
+}
+
+export type LspRenameEditPlan = {
+  canRename: boolean
+  displayName?: string
+  localizedErrorMessage?: string
+  files: LspRenameFileEdit[]
 }
 
 const TS_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts'])
@@ -475,6 +489,104 @@ export async function getLspRenamePreview(args: {
     canRename: true,
     displayName: renameInfo.displayName,
     locations: previewLocations,
+  }
+}
+
+export async function buildLspRenameEditPlan(args: {
+  workspaceRoot: string
+  filePath: string
+  line: number
+  column: number
+  accessMode: AccessMode
+  newName: string
+}): Promise<LspRenameEditPlan> {
+  const relativePath = path.relative(
+    args.workspaceRoot,
+    resolveWorkspacePath(args.workspaceRoot, args.filePath, '.', args.accessMode),
+  )
+  const { service, absolutePath } = buildLanguageService(args.workspaceRoot, relativePath)
+  const program = service.getProgram()
+  const sourceFile = program?.getSourceFile(absolutePath)
+  if (!program || !sourceFile) {
+    return {
+      canRename: false,
+      localizedErrorMessage: 'Source file not loaded in local LSP service',
+      files: [],
+    }
+  }
+
+  const nextName = args.newName.trim()
+  if (!nextName) {
+    return {
+      canRename: false,
+      localizedErrorMessage: 'New name is required',
+      files: [],
+    }
+  }
+
+  const offset = resolveOffset(sourceFile, args.line, args.column)
+  const renameInfo = service.getRenameInfo(absolutePath, offset, {
+    allowRenameOfImportPath: true,
+  })
+  if (!renameInfo.canRename) {
+    return {
+      canRename: false,
+      localizedErrorMessage: renameInfo.localizedErrorMessage,
+      files: [],
+    }
+  }
+
+  const locations = service.findRenameLocations(
+    absolutePath,
+    offset,
+    false,
+    false,
+    true,
+  )
+  const grouped = new Map<
+    string,
+    Array<{
+      start: number
+      end: number
+    }>
+  >()
+
+  for (const location of locations ?? []) {
+    const list = grouped.get(location.fileName) ?? []
+    list.push({
+      start: location.textSpan.start,
+      end: location.textSpan.start + location.textSpan.length,
+    })
+    grouped.set(location.fileName, list)
+  }
+
+  const files: LspRenameFileEdit[] = []
+  for (const [fileName, spans] of grouped.entries()) {
+    const relativeFile = toWorkspaceRelative(args.workspaceRoot, fileName, args.accessMode)
+    const originalContent = await readWorkspaceFile(
+      args.workspaceRoot,
+      relativeFile,
+      args.accessMode,
+    )
+    let updatedContent = originalContent
+    for (const span of [...spans].sort((left, right) => right.start - left.start)) {
+      updatedContent =
+        updatedContent.slice(0, span.start) +
+        nextName +
+        updatedContent.slice(span.end)
+    }
+    files.push({
+      path: relativeFile,
+      occurrences: spans.length,
+      originalContent,
+      updatedContent,
+    })
+  }
+
+  return {
+    canRename: true,
+    displayName: renameInfo.displayName,
+    files,
   }
 }
 

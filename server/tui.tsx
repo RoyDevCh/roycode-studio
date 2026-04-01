@@ -20,6 +20,21 @@ type LogEntry = {
   text: string
 }
 
+type StatusSnapshot = {
+  session?: string
+  messages?: string
+  attachments?: string
+  workspace?: string
+  access?: string
+  safeWrite?: string
+  style?: string
+  provider?: string
+  model?: string
+  cwd?: string
+  skills?: string
+  summaries?: string
+}
+
 function createCliLaunch(): { command: string; args: string[] } {
   if (existsSync(BUILT_CLI)) {
     return {
@@ -58,6 +73,10 @@ function keepTail<T>(items: T[], max = 400): T[] {
   return items.length > max ? items.slice(items.length - max) : items
 }
 
+function stripAnsi(text: string): string {
+  return text.replace(/\x1B\[[0-9;]*m/g, '')
+}
+
 function formatChannelColor(channel: LogEntry['channel']): string {
   switch (channel) {
     case 'stderr':
@@ -85,6 +104,40 @@ function shouldExitDirect(argv: string[]): boolean {
   return argv.some(flag => directFlags.has(flag))
 }
 
+function parseStatusSnapshot(line: string): Partial<StatusSnapshot> | null {
+  const normalized = stripAnsi(line)
+  if (!normalized.includes('|') || !normalized.includes('workspace ')) {
+    return null
+  }
+
+  const result: Partial<StatusSnapshot> = {}
+  const mappings: Array<[keyof StatusSnapshot, string]> = [
+    ['session', 'session '],
+    ['messages', 'messages '],
+    ['attachments', 'attachments '],
+    ['workspace', 'workspace '],
+    ['access', 'access '],
+    ['safeWrite', 'safe-write '],
+    ['style', 'style '],
+    ['provider', 'provider '],
+    ['model', 'model '],
+    ['cwd', 'cwd '],
+    ['skills', 'skills '],
+    ['summaries', 'summaries '],
+  ]
+
+  for (const segment of normalized.split('|').map(part => part.trim())) {
+    for (const [key, prefix] of mappings) {
+      if (segment.startsWith(prefix)) {
+        result[key] = segment.slice(prefix.length).trim()
+        break
+      }
+    }
+  }
+
+  return Object.keys(result).length ? result : null
+}
+
 function RoyCodeTui(): React.ReactElement {
   const { exit } = useApp()
   const { stdout } = useStdout()
@@ -97,6 +150,9 @@ function RoyCodeTui(): React.ReactElement {
     },
   ])
   const [status, setStatus] = useState('Launching RoyCode CLI...')
+  const [snapshot, setSnapshot] = useState<StatusSnapshot>({})
+  const [history, setHistory] = useState<string[]>([])
+  const [lastShortcut, setLastShortcut] = useState('none')
   const childRef = useRef<ChildProcessWithoutNullStreams | null>(null)
   const stdoutBufferRef = useRef('')
   const stderrBufferRef = useRef('')
@@ -121,10 +177,17 @@ function RoyCodeTui(): React.ReactElement {
     })
 
     childRef.current = child
+    setStatus(`CLI running (pid ${child.pid ?? 'n/a'})`)
 
     const pushLines = (channel: LogEntry['channel'], lines: string[]) => {
       if (!lines.length) {
         return
+      }
+      for (const line of lines) {
+        const parsedStatus = parseStatusSnapshot(line)
+        if (parsedStatus) {
+          setSnapshot(current => ({ ...current, ...parsedStatus }))
+        }
       }
       setLogs(current =>
         keepTail(
@@ -202,6 +265,7 @@ function RoyCodeTui(): React.ReactElement {
       return
     }
     if (key.ctrl && value === 'l') {
+      setLastShortcut('Ctrl+L')
       setLogs([
         {
           id: `log-${logIdRef.current++}`,
@@ -212,11 +276,23 @@ function RoyCodeTui(): React.ReactElement {
       return
     }
     if (key.ctrl && value === 'r') {
+      setLastShortcut('Ctrl+R')
       childRef.current?.stdin.write('/status\n')
       return
     }
     if (key.ctrl && value === 'w') {
+      setLastShortcut('Ctrl+W')
       childRef.current?.stdin.write('/context\n')
+      return
+    }
+    if (key.ctrl && value === 'g') {
+      setLastShortcut('Ctrl+G')
+      childRef.current?.stdin.write('/git\n')
+      return
+    }
+    if (key.ctrl && value === 'p') {
+      setLastShortcut('Ctrl+P')
+      childRef.current?.stdin.write('/pending\n')
     }
   })
 
@@ -238,6 +314,7 @@ function RoyCodeTui(): React.ReactElement {
       return
     }
 
+    setHistory(current => keepTail([...current, trimmed], 8))
     setLogs(current =>
       keepTail(
         [
@@ -256,6 +333,7 @@ function RoyCodeTui(): React.ReactElement {
   }
 
   const visibleLogs = logs.slice(-maxVisibleLines)
+  const recentHistory = [...history].reverse()
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
@@ -269,19 +347,67 @@ function RoyCodeTui(): React.ReactElement {
         <Text color="gray">
           status: {status}
         </Text>
+        <Text color="gray">
+          mode: interactive tui
+        </Text>
       </Box>
 
       <Box marginTop={1} flexDirection="row">
-        <Box width={26} marginRight={1} borderStyle="round" borderColor="blue" paddingX={1} flexDirection="column">
-          <Text bold color="blue">
-            Shortcuts
-          </Text>
-          <Text color="gray">Enter: send input</Text>
-          <Text color="gray">Ctrl+R: /status</Text>
-          <Text color="gray">Ctrl+W: /context</Text>
-          <Text color="gray">Ctrl+L: clear view</Text>
-          <Text color="gray">Ctrl+C: exit</Text>
-          <Text color="gray">/clear: local clear</Text>
+        <Box width={34} marginRight={1} flexDirection="column">
+          <Box borderStyle="round" borderColor="magenta" paddingX={1} flexDirection="column">
+            <Text bold color="magenta">
+              Workspace
+            </Text>
+            <Text color="gray">session: {snapshot.session ?? 'waiting for /status'}</Text>
+            <Text color="gray">workspace: {snapshot.workspace ?? process.cwd()}</Text>
+            <Text color="gray">cwd: {snapshot.cwd ?? '.'}</Text>
+            <Text color="gray">provider: {snapshot.provider ?? 'unknown'}</Text>
+            <Text color="gray">model: {snapshot.model ?? 'unknown'}</Text>
+            <Text color="gray">access: {snapshot.access ?? 'unknown'}</Text>
+            <Text color="gray">safe-write: {snapshot.safeWrite ?? 'unknown'}</Text>
+            <Text color="gray">skills: {snapshot.skills ?? 'unknown'}</Text>
+          </Box>
+
+          <Box
+            marginTop={1}
+            borderStyle="round"
+            borderColor="blue"
+            paddingX={1}
+            flexDirection="column"
+          >
+            <Text bold color="blue">
+              Shortcuts
+            </Text>
+            <Text color="gray">Enter: send input</Text>
+            <Text color="gray">Ctrl+R: /status</Text>
+            <Text color="gray">Ctrl+W: /context</Text>
+            <Text color="gray">Ctrl+G: /git</Text>
+            <Text color="gray">Ctrl+P: /pending</Text>
+            <Text color="gray">Ctrl+L: clear view</Text>
+            <Text color="gray">Ctrl+C: exit</Text>
+            <Text color="gray">last: {lastShortcut}</Text>
+          </Box>
+
+          <Box
+            marginTop={1}
+            borderStyle="round"
+            borderColor="yellow"
+            paddingX={1}
+            flexDirection="column"
+          >
+            <Text bold color="yellow">
+              Recent Input
+            </Text>
+            {recentHistory.length ? (
+              recentHistory.map((entry, index) => (
+                <Text key={`${index}-${entry}`} color="gray">
+                  {truncateText(entry, 30)}
+                </Text>
+              ))
+            ) : (
+              <Text color="gray">No commands yet</Text>
+            )}
+          </Box>
         </Box>
 
         <Box flexGrow={1} borderStyle="round" borderColor="green" paddingX={1} flexDirection="column">
@@ -300,8 +426,17 @@ function RoyCodeTui(): React.ReactElement {
         <Text color="yellow">{'>'} </Text>
         <TextInput value={input} onChange={setInput} onSubmit={submitInput} />
       </Box>
+      <Box marginTop={1}>
+        <Text color="gray">
+          Tip: /help shows the full command surface. /clear only clears the local TUI view.
+        </Text>
+      </Box>
     </Box>
   )
+}
+
+function truncateText(value: string, maxLength: number): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value
 }
 
 function main(): void {

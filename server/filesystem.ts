@@ -16,6 +16,10 @@ const IGNORED_DIRS = new Set([
 const MAX_TEXT_SIZE = 512 * 1024
 const MAX_COMMAND_OUTPUT = 24_000
 
+function stripBom(value: string): string {
+  return value.replace(/^\uFEFF/, '')
+}
+
 export function resolveWorkspacePath(
   workspaceRoot: string,
   requestedPath = '.',
@@ -112,7 +116,7 @@ export async function readWorkspaceFile(
   if (fileStat.size > MAX_TEXT_SIZE) {
     throw new Error('File is too large to load in the WebUI editor')
   }
-  return readFile(fullPath, 'utf8')
+  return stripBom(await readFile(fullPath, 'utf8'))
 }
 
 export async function readWorkspaceFileIfExists(
@@ -211,7 +215,7 @@ async function walkForSearch(
       if (fileStat.size > 128 * 1024) {
         continue
       }
-      const content = await readFile(fullPath, 'utf8')
+      const content = stripBom(await readFile(fullPath, 'utf8'))
       const lines = content.split(/\r?\n/)
       for (let index = 0; index < lines.length; index += 1) {
         const line = lines[index] ?? ''

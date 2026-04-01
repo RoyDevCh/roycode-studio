@@ -32,7 +32,7 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - RoyCode now includes local `teams` so several named subagents or roles can be grouped, run together, or launched as parallel background tasks
 - RoyCode now includes a self-hosted `bridge` layer that can talk to another RoyCode server over HTTP for health, context, and remote command execution
 - RoyCode now includes a self-hosted `marketplace` registry for installable local skills or plugins from a path or git URL
-- RoyCode now includes a local TypeScript/JavaScript `LSP` subset for diagnostics, definitions, implementations, references, rename preview, hover, document symbols, and workspace symbols
+- RoyCode now includes a local TypeScript/JavaScript `LSP` subset for diagnostics, definitions, implementations, references, rename preview, rename apply, hover, document symbols, and workspace symbols
 - RoyCode now ships a bundled local skill set adapted from the source snapshot, including `simplify`, `verify`, `remember`, `update-config`, `skillify`, `batch`, `debug`, `keybindings`, `stuck`, and `lorem-ipsum`
 - RoyCode CLI now supports local plugins with markdown command loading, direct `/plugin-name:command` execution, and plugin-provided skills
 - RoyCode now supports user-configured local MCP servers over `stdio` and Streamable HTTP, including MCP tools, prompts, and resources
@@ -113,6 +113,8 @@ Ink-style TUI:
 npm run tui
 ```
 
+The TUI now keeps a small workspace/session panel, shortcut rail, recent input list, and a live output pane so the default `roycode` launcher feels closer to a terminal application instead of a plain line prompt.
+
 Global terminal command:
 
 ```bash
@@ -181,6 +183,7 @@ Useful CLI flows:
 /lsp defs src/index.ts 10 5
 /lsp impl src/index.ts 10 5
 /lsp rename-preview src/index.ts 10 5 RenamedSymbol
+/lsp rename-apply src/index.ts 10 5 RenamedSymbol
 /lsp workspace-symbols handler
 /team create reviewers reviewer,security
 /team task reviewers "Audit the current auth changes"

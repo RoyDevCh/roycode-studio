@@ -33,6 +33,7 @@ import {
   type LocalCommandDocument,
 } from './localCommands.js'
 import {
+  buildLspRenameEditPlan,
   getLspDefinitions,
   getLspDiagnostics,
   getLspDocumentSymbols,
@@ -74,6 +75,7 @@ import {
 import { buildEffectiveSystemPrompt } from './systemPrompt.js'
 import { webFetch, webSearch } from './web.js'
 import {
+  applyWorkspaceBatchChanges,
   commitWorkspaceChange,
   getWorkspaceFilePayload,
   stagePendingChange,
@@ -1138,6 +1140,24 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
           newName: { type: 'string' },
         },
         required: ['path', 'line', 'column'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'lsp_rename_apply',
+      description:
+        'Apply a TypeScript or JavaScript rename across all affected files, honoring safe-write mode.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          line: { type: 'number' },
+          column: { type: 'number' },
+          newName: { type: 'string' },
+        },
+        required: ['path', 'line', 'column', 'newName'],
       },
     },
   },
@@ -2277,6 +2297,42 @@ async function executeTool(
         newName: input.newName ? String(input.newName) : undefined,
       })
       return JSON.stringify(preview, null, 2)
+    }
+    case 'lsp_rename_apply': {
+      const plan = await buildLspRenameEditPlan({
+        workspaceRoot,
+        filePath: String(input.path ?? ''),
+        line: Number(input.line ?? 1),
+        column: Number(input.column ?? 1),
+        accessMode,
+        newName: String(input.newName ?? ''),
+      })
+      if (!plan.canRename) {
+        throw new Error(plan.localizedErrorMessage ?? 'Rename cannot be applied')
+      }
+
+      const results = await applyWorkspaceBatchChanges({
+        workspaceRoot,
+        files: plan.files.map(file => ({
+          path: file.path,
+          content: file.updatedContent,
+          source: 'agent',
+        })),
+        safeWriteMode: settings.safeWriteMode,
+        accessMode,
+      })
+
+      return JSON.stringify(
+        {
+          canRename: true,
+          displayName: plan.displayName,
+          fileCount: plan.files.length,
+          occurrenceCount: plan.files.reduce((sum, file) => sum + file.occurrences, 0),
+          results,
+        },
+        null,
+        2,
+      )
     }
     case 'lsp_hover': {
       const hover = await getLspHover({
