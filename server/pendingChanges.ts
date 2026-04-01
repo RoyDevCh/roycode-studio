@@ -156,6 +156,50 @@ export async function commitWorkspaceChange(args: {
   await writePendingMap(pending)
 }
 
+export async function applyWorkspaceBatchChanges(args: {
+  workspaceRoot: string
+  files: Array<{
+    path: string
+    content: string
+    source: PendingChangeSource
+  }>
+  safeWriteMode: boolean
+  accessMode?: AccessMode
+}): Promise<Array<{ path: string; mode: 'pending' | 'written' }>> {
+  const accessMode = args.accessMode ?? 'workspace'
+  const results: Array<{ path: string; mode: 'pending' | 'written' }> = []
+
+  for (const file of args.files) {
+    if (args.safeWriteMode) {
+      await stagePendingChange({
+        workspaceRoot: args.workspaceRoot,
+        path: file.path,
+        content: file.content,
+        source: file.source,
+        accessMode,
+      })
+      results.push({
+        path: normalizePath(args.workspaceRoot, file.path, accessMode),
+        mode: 'pending',
+      })
+      continue
+    }
+
+    await commitWorkspaceChange({
+      workspaceRoot: args.workspaceRoot,
+      path: file.path,
+      content: file.content,
+      accessMode,
+    })
+    results.push({
+      path: normalizePath(args.workspaceRoot, file.path, accessMode),
+      mode: 'written',
+    })
+  }
+
+  return results
+}
+
 export async function discardPendingChange(
   workspaceRoot: string,
   requestedPath: string,

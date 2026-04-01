@@ -58,6 +58,7 @@ import {
   type LocalAgentDefinition,
 } from './localAgents.js'
 import {
+  buildLspRenameEditPlan,
   getLspDefinitions,
   getLspDiagnostics,
   getLspDocumentSymbols,
@@ -90,6 +91,7 @@ import {
 } from './teams.js'
 import { webFetch, webSearch } from './web.js'
 import {
+  applyWorkspaceBatchChanges,
   applyAllPendingChanges,
   applyPendingChange,
   discardPendingChange,
@@ -732,6 +734,7 @@ function printHelp(): void {
       '/lsp impl <path> <line> <column> - go to implementation',
       '/lsp refs <path> <line> <column> - find references',
       '/lsp rename-preview <path> <line> <column> [newName] - preview rename targets',
+      '/lsp rename-apply <path> <line> <column> <newName> - apply rename through safe-write or direct write',
       '/lsp hover <path> <line> <column> - show quick info',
       '/lsp symbols <path> - list document symbols',
       '/lsp workspace-symbols <query> - search symbols across the workspace',
@@ -2636,7 +2639,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
   const targetPath = tokens.shift()
 
   if (!action || !targetPath) {
-    info('Usage: /lsp diagnostics|defs|impl|refs|rename-preview|hover|symbols <path> [line] [column]')
+    info('Usage: /lsp diagnostics|defs|impl|refs|rename-preview|rename-apply|hover|symbols <path> [line] [column]')
     return
   }
 
@@ -2712,6 +2715,52 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
     return
   }
 
+  if (action === 'rename-apply' || action === 'rename-write') {
+    const newName = stripWrappingQuotes(tokens[2] || '').trim()
+    if (!newName) {
+      fail('Usage: /lsp rename-apply <path> <line> <column> <newName>')
+      return
+    }
+
+    const plan = await buildLspRenameEditPlan({
+      workspaceRoot: state.settings.workspaceRoot,
+      filePath: targetPath,
+      line: position.line,
+      column: position.column,
+      accessMode: state.settings.accessMode,
+      newName,
+    })
+    if (!plan.canRename) {
+      throw new Error(plan.localizedErrorMessage ?? 'Rename cannot be applied')
+    }
+
+    const results = await applyWorkspaceBatchChanges({
+      workspaceRoot: state.settings.workspaceRoot,
+      files: plan.files.map(file => ({
+        path: file.path,
+        content: file.updatedContent,
+        source: 'manual',
+      })),
+      safeWriteMode: state.settings.safeWriteMode,
+      accessMode: state.settings.accessMode,
+    })
+
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          canRename: true,
+          displayName: plan.displayName,
+          fileCount: plan.files.length,
+          occurrenceCount: plan.files.reduce((sum, file) => sum + file.occurrences, 0),
+          results,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    return
+  }
+
   if (action === 'hover') {
     const hover = await getLspHover({
       workspaceRoot: state.settings.workspaceRoot,
@@ -2724,7 +2773,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
     return
   }
 
-  fail('Usage: /lsp diagnostics|defs|impl|refs|rename-preview|hover|symbols <path> [line] [column] | /lsp workspace-symbols <query>')
+  fail('Usage: /lsp diagnostics|defs|impl|refs|rename-preview|rename-apply|hover|symbols <path> [line] [column] | /lsp workspace-symbols <query>')
 }
 
 function printSessions(sessions: CliSessionRecord[], currentSessionId?: string): void {
