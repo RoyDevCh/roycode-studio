@@ -1,0 +1,248 @@
+# RoyCode Studio
+
+RoyCode Studio is a personal WebUI coding workspace built next to the Claude Code source snapshot in this repo. The goal is not to rebuild the leaked CLI exactly as-is, but to turn the useful ideas in that snapshot into a practical multi-model coding tool with a browser interface.
+
+## What It Supports
+
+- Quick-add API presets for DeepSeek, MiniMax, and custom OpenAI-compatible endpoints
+- Persistent provider settings in `personal-webui/data/settings.json`
+- Provider model visibility and model refresh
+- Streaming chat with tool activity shown in real time
+- Chat-first UI inspired by modern LLM products, with a left conversation rail and right workspace dock
+- Light and dark themes with product-style topbar actions
+- Collapsible chat rail, collapsible workspace dock, and draggable dock resizing
+- A dedicated Git dock with branch/status, diff preview, stage/unstage, attach-changed-file, and commit actions
+- An Electron desktop shell with a native app window, app menu, and local backend boot
+- Desktop builds now compile the backend into `dist-server/` and can produce a portable Windows executable
+- A terminal-first `RoyCode CLI` that behaves much closer to Claude Code than the WebUI does
+- RoyCode CLI now supports saved sessions, `/resume`, `/title`, `/sessions`, and one-shot `--prompt` runs
+- RoyCode CLI now supports Claude-style `-p` / `--print` runs with optional JSON output
+- RoyCode CLI includes local slash commands for files, search, shell, pending changes, Git, provider/model switching, and review/fix/plan/explain macros
+- RoyCode CLI and the shared agent now include built-in `web_search` and `web_fetch` support for current information and public docs lookup
+- RoyCode CLI now supports local `skills`, event `hooks`, and background `tasks` for a more agent-like terminal workflow
+- RoyCode now auto-loads Claude-style project `.claude/skills`, user `~/.claude/skills`, and project/user `.claude/commands`
+- RoyCode now auto-loads Claude-style project/user `.claude/agents` and can run them as local subagents
+- RoyCode now follows Claude-style source priority more closely, with user-level `.claude` entries overriding project-level entries and nested project directories being discovered from the current `cwd`
+- RoyCode now supports Claude-style `.claude/rules`, `.claude/output-styles`, and `.claude/agent-memory`, including nested project discovery from the current `cwd`
+- RoyCode now supports project `.mcp.json` auto-discovery and can merge those MCP servers with RoyCode's saved local MCP registry
+- RoyCode now supports plugin-provided output styles from `output-styles/*.md`, in addition to built-in and `.claude/output-styles` styles
+- RoyCode now includes a local git `worktree` workflow and `teleport` shortcuts for switching the session into another worktree quickly
+- RoyCode now includes a local notebook runtime for `.ipynb` cell listing, reading, editing, insertion, and deletion with the same safe-write flow as normal files
+- RoyCode now includes local `teams` so several named subagents or roles can be grouped and run together
+- RoyCode now includes a self-hosted `bridge` layer that can talk to another RoyCode server over HTTP for health, context, and remote command execution
+- RoyCode now includes a self-hosted `marketplace` registry for installable local skills or plugins from a path or git URL
+- RoyCode now includes a local TypeScript/JavaScript `LSP` subset for diagnostics, definitions, references, hover, and document symbols
+- RoyCode now ships a bundled local skill set adapted from the source snapshot, including `simplify`, `verify`, `remember`, `update-config`, `skillify`, `batch`, `debug`, `keybindings`, `stuck`, and `lorem-ipsum`
+- RoyCode CLI now supports local plugins with markdown command loading, direct `/plugin-name:command` execution, and plugin-provided skills
+- RoyCode now supports user-configured local MCP servers over `stdio` and Streamable HTTP, including MCP tools, prompts, and resources
+- RoyCode now builds a richer segmented system prompt with workspace instructions, workspace memory, task policy, skill policy, and runtime policy sections
+- RoyCode can auto-load workspace instruction files such as `CLAUDE.md`, `ROYCODE.md`, `.claude/INSTRUCTIONS.md`, and `.github/copilot-instructions.md`
+- RoyCode includes persistent workspace memory files and CLI memory commands so stable project context can survive across sessions
+- RoyCode CLI now supports Claude-style `/context`, `/doctor`, `/config`, `/rules`, `/output-style`, `/agent-memory`, and `/todos`
+- The shared agent now exposes Claude-style compatibility helpers such as `skill`, `present_files`, `run_subagent`, `list_skills`, `read_skill`, `list_tasks`, `get_task`, and `create_task`
+- The shared agent now also exposes `tool_search`, `list_rules`, `read_rule`, `list_output_styles`, `get_config`, `set_config`, `read_todos`, `todo_write`, `list_commands`, and `read_command`
+- Claude-style `allowed-tools`, `tools`, and `disallowedTools` names such as `Read`, `Grep`, `Bash`, `WebFetch`, and `Agent` are now mapped onto RoyCode's local tool names
+- RoyCode CLI supports pasted multi-line input via `/multiline` and non-interactive stdin piping for scripted use
+- RoyCode CLI now supports Claude-style conversation workflow commands such as `/compact`, `/rewind`, and `/export`
+- RoyCode hooks now accept JSON stdin and structured JSON stdout so hooks can emit `systemMessage`, block execution, attach extra context, mutate prompt input, and filter by matcher text or regex more like Claude Code hooks
+- Sidebar project rail for quick workspace switching, with a chat list that behaves more like a project tree + session tree
+- Project rail now supports search, favorites, and recent-project grouping
+- Project nodes in the sidebar can expand to reveal their recent chats, so the left rail behaves more like a project tree + session tree
+- Project rail now supports view filters and direct "new chat in this project" actions
+- Project chat nodes in the sidebar now support direct pin, archive, and delete actions without leaving the tree
+- Sidebar and session cards now support direct rename flows and delete confirmation for chat management
+- A Ctrl+K quick switcher now lets you search projects, chats, tabs, and common actions from one place
+- Project cards and one-click workspace switching for local coding workspaces
+- Workspace file browsing and in-browser editing
+- Session search and file search
+- Chat history management with pinned chats, archived chats, per-project session grouping, drag sorting, and tags
+- Prompt attachments for current workspace files and uploaded local text files
+- Prompt attachments now support images too, with drag-and-drop upload, paste-from-clipboard screenshots, and in-chat previews
+- Drag-and-drop files directly into the composer to attach them as prompt context
+- Slash-command style task shortcuts such as `/review`, `/fix`, `/plan`, `/git`, and `/status`
+- Desktop mode can open a native folder picker so you can switch workspace roots without hand-typing paths
+- Filesystem access mode can be switched between `workspace` and `unrestricted`, so the desktop app can browse and edit absolute local paths outside the current workspace root
+- Local chat archive export/import so histories can be moved between machines
+- Code-block rendering with one-click copy and send-to-editor actions
+- Direct code-block replace for the currently opened file so you can review the diff immediately
+- Code blocks can also stage/write directly into the current file so they enter the existing approval flow
+- Code blocks can first open a local draft diff so you can review before staging or writing
+- Assistant replies now render markdown blocks such as headings, lists, quotes, tables, links, and inline code
+- Code blocks now show syntax highlighting and line numbers for a more IDE-like reading experience
+- Diff preview for the current file
+- Pending changes support source filters and batch apply for visible results
+- Visible pending changes can also be batch rejected to clear an approval queue faster
+- Pending diffs can be split into patch chunks so individual hunks can be previewed, multi-selected, and staged on their own
+- Built-in terminal panel with command history
+- Safe write mode with pending-change approval before disk writes
+- Keyboard shortcuts for common layout and dock navigation actions
+- Per-change approval with inline diff preview for staged edits
+- Draft patch preview inside the Changes panel before a write enters the approval queue
+- Draft patches can be split into chunks so you can keep, preview, or stage only selected hunks
+- Multi-session tabs so each chat can keep its own model, file, and terminal context
+
+## Run It
+
+```bash
+npm install
+npm run dev
+```
+
+Development URLs:
+
+- Frontend: `http://localhost:5173`
+- Backend: `http://localhost:8787`
+
+Production build:
+
+```bash
+npm run build
+npm run start
+```
+
+Terminal CLI:
+
+```bash
+npm run cli
+```
+
+Global terminal command:
+
+```bash
+npm run install:command
+roycode
+roycode-full
+```
+
+Built terminal CLI:
+
+```bash
+npm run cli:built
+```
+
+Example CLI usage:
+
+```bash
+npm run cli -- --resume latest
+npm run cli -- --workspace "C:\\my-project" --prompt "Review the repo and list the top risks"
+roycode --web-search "TypeScript handbook site:typescriptlang.org"
+roycode --web-fetch "https://www.typescriptlang.org/docs/handbook/intro.html"
+roycode -p "Summarize the current workspace status in 3 bullets"
+roycode --skill code-review
+roycode --resume latest
+roycode-full
+roycode --prompt "Look up the latest public docs for OpenAI responses API and summarize the key points"
+```
+
+Useful CLI flows:
+
+```bash
+/skills
+/commands
+/commands show review
+/agents
+/agent show auditor
+/context
+/doctor
+/rules all
+/output-style
+/output-style set explanatory
+/config get outputStyle
+/todos add "ship context command"
+/todos
+/compact
+/rewind 1
+/export clipboard
+/skill use code-review
+/plugins
+/plugin import "C:\\path\\to\\plugin-dir"
+/plugin commands
+/my-plugin:review auth module
+/memory
+/memory append "The main build command is npm run build"
+/instructions
+/mcp add-stdio smoke node dist-server/mcp-smoke-server.js
+/mcp tools smoke
+/mcp call smoke echo {"text":"hello"}
+/hook add instructions-loaded "Write-Output hook-fired" --match CLAUDE.md
+/worktree
+/worktree add "..\\repo-wt" feature-branch
+/teleport worktree feature-branch
+/notebook cells notebook.ipynb
+/lsp defs src/index.ts 10 5
+/team create reviewers reviewer,security
+/bridge add local http://127.0.0.1:8787
+/marketplace add smoke-skill auto "C:\\path\\to\\skill"
+/task start "Review the workspace and list the top risks"
+/tasks
+```
+
+Claude-style compatibility notes:
+
+- Project-local skills: `.claude/skills/**/SKILL.md` and `.claude/skills/**/*.md`
+- User-local skills: `~/.claude/skills/**/SKILL.md` and `~/.claude/skills/**/*.md`
+- Project-local slash commands: `.claude/commands/**/*.md`
+- User-local slash commands: `~/.claude/commands/**/*.md`
+- Project-local subagents: `.claude/agents/**/*.md`
+- User-local subagents: `~/.claude/agents/**/*.md`
+- Project-local rules: `.claude/rules/**/*.md`
+- User-local rules: `~/.claude/rules/**/*.md`
+- Project-local output styles: `.claude/output-styles/**/*.md`
+- User-local output styles: `~/.claude/output-styles/**/*.md`
+- Agent memory: `.claude/agent-memory/<agent>/MEMORY.md`, `.claude/agent-memory-local/<agent>/MEMORY.md`, and `~/.claude/agent-memory/<agent>/MEMORY.md`
+- Project `.mcp.json` servers: `.mcp.json`
+- Imported skill bundles: markdown files, skill directories, `.skill`, and `.zip`
+- Built-in bundled skills are auto-seeded into `personal-webui/data/skills/` the first time RoyCode loads local skills
+- Nested skill and command names resolve with `namespace:child` style names
+- Nested project `.claude/skills`, `.claude/commands`, `.claude/agents`, `.claude/rules`, and `.claude/output-styles` are discovered from the current `cwd` back up to the workspace root
+
+Local MCP smoke server for testing:
+
+```bash
+npm run mcp:smoke-server
+```
+
+Desktop shell:
+
+```bash
+npm run desktop
+```
+
+Portable Windows build:
+
+```bash
+npm run desktop:dist
+```
+
+Build output:
+
+- Portable EXE: `release/RoyCode Studio 0.1.0.exe`
+- Unpacked desktop app: `release/win-unpacked/`
+
+You can also use:
+
+- `start-webui.ps1`
+- `start-webui.bat`
+- `start-cli.ps1`
+- `start-cli.bat`
+- `start-desktop.ps1`
+- `start-desktop.bat`
+- `start-desktop-packaged.ps1`
+- `start-desktop-packaged.bat`
+
+## Why This Is a Separate App
+
+This source snapshot looks much closer to a sourcemap-derived code dump than a complete, buildable public repository. It is missing the normal packaging and infrastructure needed to run the original internal product directly. Building a clean companion app is a much faster and safer path than trying to force the snapshot itself into a working release.
+
+## Snapshot Takeaways
+
+- `main.tsx` is a large stateful REPL entry point
+- `commands.ts` centralizes command registration
+- `utils/model/*` contains model/provider abstractions
+- `bridge/` and `server/` suggest the original tool already had remote or UI-oriented architecture
+- `replLauncher.tsx` and related UI files show a React/Ink style terminal interface rather than a minimal readline shell
+
+## References
+
+- DeepSeek docs: <https://api-docs.deepseek.com/>
+- MiniMax OpenAI-compatible API docs: <https://platform.minimaxi.com/docs/api-reference/text-openai-api>

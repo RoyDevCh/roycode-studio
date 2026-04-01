@@ -1,0 +1,73 @@
+{
+  "name": "roycode-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Personal desktop and web coding workspace inspired by Codex and Claude Code.",
+  "author": "Roy",
+  "main": "desktop/main.cjs",
+  "bin": {
+    "roycode": "./bin/roycode.js",
+    "roycode-full": "./bin/roycode-full.js"
+  },
+  "productName": "RoyCode Studio",
+  "scripts": {
+    "dev": "concurrently \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx watch server/index.ts",
+    "dev:client": "vite",
+    "build": "vite build && npm run build:server",
+    "build:server": "tsc -p tsconfig.server.json",
+    "start": "tsx server/index.ts",
+    "cli": "tsx server/cli.ts",
+    "cli:built": "npm run build && node dist-server/cli.js",
+    "mcp:smoke-server": "tsx server/mcp-smoke-server.ts",
+    "install:command": "npm run build && npm link",
+    "desktop:open": "electron desktop/main.cjs",
+    "desktop": "npm run build && npm run desktop:open",
+    "desktop:dist": "npm run build && electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.roycode.studio",
+    "productName": "RoyCode Studio",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-server/**/*",
+      "desktop/**/*",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "portable"
+      ]
+    }
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "cors": "latest",
+    "express": "latest",
+    "highlight.js": "^11.11.1",
+    "openai": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "typescript": "latest",
+    "yaml": "^2.8.3",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@types/cors": "latest",
+    "@types/express": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "latest",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
+    "tsx": "latest",
+    "vite": "latest"
+  }
+}
