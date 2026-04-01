@@ -134,6 +134,79 @@ After first launch on a new computer:
 - choose the workspace you want to use
 - reopen the terminal once if `roycode` was just installed into PATH
 
+## Configure Models
+
+RoyCode supports provider presets for `DeepSeek`, `MiniMax`, and custom OpenAI-compatible APIs.
+
+The easiest way to configure models:
+
+- start the WebUI or desktop app
+- open the `Models` panel
+- click a preset card such as `DeepSeek` or `MiniMax`, or add a `custom` provider
+- fill in `Base URL`, `API Key`, `Models`, and `Default Model`
+- save the provider, then pick it as the active provider/model
+
+You can also edit the local settings file directly:
+
+- settings path: `personal-webui/data/settings.json`
+- important fields:
+  - `providers`: the saved provider list
+  - `selectedProviderId`: the active provider
+  - `selectedModel`: the active model
+
+Provider object format:
+
+```json
+{
+  "id": "your-provider-id",
+  "name": "DeepSeek",
+  "preset": "deepseek",
+  "baseUrl": "https://api.deepseek.com",
+  "apiKey": "YOUR_API_KEY",
+  "models": ["deepseek-chat", "deepseek-reasoner"],
+  "enabled": true,
+  "defaultModel": "deepseek-chat"
+}
+```
+
+Example custom OpenAI-compatible provider:
+
+```json
+{
+  "id": "my-openai-compatible-provider",
+  "name": "My Provider",
+  "preset": "custom",
+  "baseUrl": "https://your-openai-compatible-host/v1",
+  "apiKey": "YOUR_API_KEY",
+  "models": ["model-a", "model-b"],
+  "enabled": true,
+  "defaultModel": "model-a"
+}
+```
+
+Common preset examples:
+
+- DeepSeek:
+  - `baseUrl`: `https://api.deepseek.com`
+  - common models: `deepseek-chat`, `deepseek-reasoner`
+- MiniMax:
+  - `baseUrl`: use the OpenAI-compatible endpoint provided by your MiniMax account
+  - common models: fill the exact names returned by your MiniMax account or the model refresh action
+- Custom:
+  - `baseUrl`: any OpenAI-compatible `/v1` endpoint
+  - `models`: whatever that provider exposes
+
+CLI model switching:
+
+```bash
+/providers
+/provider <id-or-name>
+/models
+/model <model-name>
+```
+
+If you already have an API-compatible provider but are unsure which models are available, save the provider first and then use the model refresh action in the `Models` panel.
+
 ## Run It
 
 ```bash
