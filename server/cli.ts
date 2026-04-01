@@ -62,7 +62,10 @@ import {
   getLspDiagnostics,
   getLspDocumentSymbols,
   getLspHover,
+  getLspImplementations,
+  getLspRenamePreview,
   getLspReferences,
+  getLspWorkspaceSymbols,
 } from './lsp.js'
 import {
   addMarketplaceItem,
@@ -161,6 +164,7 @@ import { clearSessionTodos, readSessionTodos, writeSessionTodos } from './todos.
 import {
   addGitWorktree,
   findGitWorktree,
+  inspectGitWorktree,
   listGitWorktrees,
   pruneGitWorktrees,
   removeGitWorktree,
@@ -586,6 +590,7 @@ function printCliUsage(): void {
       '  --help                 Show CLI help',
       '  --prompt <text>        Run one prompt and exit',
       '  -p, --print <text>     Claude-style print mode (plain final answer)',
+      '  --plain                Force the direct line-based CLI instead of the TUI launcher',
       '  --web-search <query>   Run one web search and exit',
       '  --web-fetch <url>      Fetch one public URL and exit',
       '  --workspace <path>     Set workspace root',
@@ -610,6 +615,8 @@ function printCliUsage(): void {
       '  --new                  Force a fresh session',
       '',
       'Notes:',
+      '  - The "roycode" launcher now opens an Ink-style TUI by default in interactive terminals.',
+      '  - Use --plain if you want the direct line-based CLI instead of the TUI wrapper.',
       '  - Paths with spaces are supported. If your shell needs it, wrap them in quotes.',
       '  - In piped mode, each incoming line is processed as a prompt or slash command.',
       '',
@@ -700,6 +707,8 @@ function printHelp(): void {
       '/mcp prompt <server> <prompt> [json] - resolve one MCP prompt',
       '/mcp resource <server> <uri> - read one MCP resource',
       '/worktree - list git worktrees',
+      '/worktree show <ref> - inspect one git worktree',
+      '/worktree switch <ref> - switch the session workspace to a git worktree',
       '/worktree add <path> [branch] [base] - create a git worktree',
       '/worktree remove <path> [--force] - remove a git worktree',
       '/teleport worktree <name|path> - switch the session workspace to a git worktree',
@@ -711,6 +720,7 @@ function printHelp(): void {
       '/teams - list local teams',
       '/team create <name> [member,member,...] - create a local team',
       '/team run <name> <prompt> - run all members of a team',
+      '/team task <name> <prompt> - launch one background task per team member',
       '/bridges - list configured RoyCode bridge endpoints',
       '/bridge add <name> <url> [token] - register a remote RoyCode bridge',
       '/bridge run <name> <command> - execute a remote command through a bridge',
@@ -719,9 +729,12 @@ function printHelp(): void {
       '/marketplace install <name> - install a marketplace item',
       '/lsp diagnostics <path> - show TypeScript/JavaScript diagnostics',
       '/lsp defs <path> <line> <column> - go to definition',
+      '/lsp impl <path> <line> <column> - go to implementation',
       '/lsp refs <path> <line> <column> - find references',
+      '/lsp rename-preview <path> <line> <column> [newName] - preview rename targets',
       '/lsp hover <path> <line> <column> - show quick info',
       '/lsp symbols <path> - list document symbols',
+      '/lsp workspace-symbols <query> - search symbols across the workspace',
       '/tasks - list background tasks',
       '/task start <prompt> - launch a background agent task',
       '/task show <id> - inspect one task',
@@ -1369,6 +1382,29 @@ function printWorktreeList(
       `${marker} ${worktree.path}${flags ? ` ${dim(`[${flags}]`)}` : ''}\n`,
     )
   }
+}
+
+function printWorktreeDetails(worktree: {
+  path: string
+  branch?: string
+  head?: string
+  detached?: boolean
+  locked?: boolean
+  prunable?: boolean
+  current?: boolean
+  statusSummary?: string
+  changedFiles?: number
+}): void {
+  printKeyValueBlock(`Worktree ${worktree.path}`, [
+    { label: 'branch', value: worktree.branch || '(detached)' },
+    { label: 'head', value: worktree.head || '(unknown)' },
+    { label: 'current', value: worktree.current ? 'yes' : 'no' },
+    { label: 'detached', value: worktree.detached ? 'yes' : 'no' },
+    { label: 'locked', value: worktree.locked ? 'yes' : 'no' },
+    { label: 'prunable', value: worktree.prunable ? 'yes' : 'no' },
+    { label: 'status', value: worktree.statusSummary || '(unknown)' },
+    { label: 'changed-files', value: String(worktree.changedFiles ?? 0) },
+  ])
 }
 
 function parseLineColumnArgs(tokens: string[]): { line: number; column: number } {
@@ -2042,6 +2078,37 @@ async function handleWorktreeCommand(state: CliState, rawArgs: string): Promise<
     return
   }
 
+  if (action === 'show' || action === 'inspect' || action === 'status') {
+    const reference = stripWrappingQuotes(rest).trim()
+    if (!reference) {
+      fail('Usage: /worktree show <name|path>')
+      return
+    }
+    const details = await inspectGitWorktree(state.settings.workspaceRoot, reference)
+    if (!details) {
+      fail(`Worktree not found: ${reference}`)
+      return
+    }
+    printWorktreeDetails(details)
+    return
+  }
+
+  if (action === 'switch') {
+    const reference = stripWrappingQuotes(rest).trim()
+    if (!reference) {
+      fail('Usage: /worktree switch <name|path>')
+      return
+    }
+    const worktree = await findGitWorktree(state.settings.workspaceRoot, reference)
+    if (!worktree) {
+      fail(`Worktree not found: ${reference}`)
+      return
+    }
+    await handleWorkspaceCommand(state, worktree.path)
+    ok(`Switched to worktree ${worktree.path}`)
+    return
+  }
+
   if (action === 'remove') {
     const tokens = tokenizeQuotedArgs(rest)
     const targetPath = tokens.shift()
@@ -2064,7 +2131,7 @@ async function handleWorktreeCommand(state: CliState, rawArgs: string): Promise<
     return
   }
 
-  fail('Usage: /worktree [list|add <path> [branch] [base]|remove <path> [--force]|prune]')
+  fail('Usage: /worktree [list|show <ref>|switch <ref>|add <path> [branch] [base]|remove <path> [--force]|prune]')
 }
 
 async function handleTeleportCommand(state: CliState, rawArgs: string): Promise<void> {
@@ -2340,7 +2407,50 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
     return
   }
 
-  fail('Usage: /team create|show|add-member|remove-member|run|delete ...')
+  if (action === 'task') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const teamName = tokens.shift()
+    if (!teamName || !tokens.length) {
+      fail('Usage: /team task <team> <prompt>')
+      return
+    }
+    const team = await getTeam(teamName)
+    if (!team) {
+      fail(`Team not found: ${teamName}`)
+      return
+    }
+    const taskPrompt = tokens.join(' ')
+    const createdTasks = []
+    for (const member of team.members) {
+      const agent = member.agentName
+        ? await getLocalAgent(member.agentName, state.settings.workspaceRoot, state.cwd)
+        : null
+      const rolePrompt = [
+        member.rolePrompt ? `Role: ${member.rolePrompt}` : '',
+        `Team member: ${member.name}`,
+        taskPrompt,
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+      const task = await createTask({
+        title: `${team.name}:${member.name}`,
+        prompt: rolePrompt,
+        workspaceRoot: state.settings.workspaceRoot,
+        accessMode: state.settings.accessMode,
+        safeWriteMode: state.settings.safeWriteMode,
+        providerId: getSelectedProvider(state.settings).id,
+        model: agent?.model || resolveModel(state.settings, getSelectedProvider(state.settings)),
+        cwd: state.cwd,
+        baseMessages: [],
+      })
+      launchTaskRunner(task.id)
+      createdTasks.push({ member: member.name, id: task.id, logPath: task.logPath })
+    }
+    process.stdout.write(`${JSON.stringify({ team: team.name, tasks: createdTasks }, null, 2)}\n`)
+    return
+  }
+
+  fail('Usage: /team create|show|add-member|remove-member|run|task|delete ...')
 }
 
 async function handleBridgesCommand(): Promise<void> {
@@ -2507,11 +2617,26 @@ async function handleMarketplaceCommand(rawArgs: string): Promise<void> {
 
 async function handleLspCommand(state: CliState, rawArgs: string): Promise<void> {
   const { action, rest } = parseCommandTarget(rawArgs)
+  if (action === 'workspace-symbols' || action === 'workspace' || action === 'ws') {
+    const query = stripWrappingQuotes(rest).trim()
+    if (!query) {
+      fail('Usage: /lsp workspace-symbols <query>')
+      return
+    }
+    const symbols = await getLspWorkspaceSymbols({
+      workspaceRoot: state.settings.workspaceRoot,
+      query,
+      accessMode: state.settings.accessMode,
+    })
+    process.stdout.write(`${JSON.stringify(symbols, null, 2)}\n`)
+    return
+  }
+
   const tokens = tokenizeQuotedArgs(rest)
   const targetPath = tokens.shift()
 
   if (!action || !targetPath) {
-    info('Usage: /lsp diagnostics|defs|refs|hover|symbols <path> [line] [column]')
+    info('Usage: /lsp diagnostics|defs|impl|refs|rename-preview|hover|symbols <path> [line] [column]')
     return
   }
 
@@ -2549,6 +2674,18 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
     return
   }
 
+  if (action === 'impl' || action === 'implementation') {
+    const implementations = await getLspImplementations({
+      workspaceRoot: state.settings.workspaceRoot,
+      filePath: targetPath,
+      line: position.line,
+      column: position.column,
+      accessMode: state.settings.accessMode,
+    })
+    process.stdout.write(`${JSON.stringify(implementations, null, 2)}\n`)
+    return
+  }
+
   if (action === 'refs' || action === 'references') {
     const references = await getLspReferences({
       workspaceRoot: state.settings.workspaceRoot,
@@ -2558,6 +2695,20 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       accessMode: state.settings.accessMode,
     })
     process.stdout.write(`${JSON.stringify(references, null, 2)}\n`)
+    return
+  }
+
+  if (action === 'rename-preview' || action === 'rename') {
+    const newName = tokens[2]
+    const preview = await getLspRenamePreview({
+      workspaceRoot: state.settings.workspaceRoot,
+      filePath: targetPath,
+      line: position.line,
+      column: position.column,
+      accessMode: state.settings.accessMode,
+      newName,
+    })
+    process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`)
     return
   }
 
@@ -2573,7 +2724,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
     return
   }
 
-  fail('Usage: /lsp diagnostics|defs|refs|hover|symbols <path> [line] [column]')
+  fail('Usage: /lsp diagnostics|defs|impl|refs|rename-preview|hover|symbols <path> [line] [column] | /lsp workspace-symbols <query>')
 }
 
 function printSessions(sessions: CliSessionRecord[], currentSessionId?: string): void {
