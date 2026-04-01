@@ -37,7 +37,10 @@ import {
   getLspDiagnostics,
   getLspDocumentSymbols,
   getLspHover,
+  getLspImplementations,
+  getLspRenamePreview,
   getLspReferences,
+  getLspWorkspaceSymbols,
 } from './lsp.js'
 import {
   installMarketplaceItem,
@@ -91,6 +94,7 @@ import {
 import { readSessionTodos, writeSessionTodos } from './todos.js'
 import {
   addGitWorktree,
+  inspectGitWorktree,
   listGitWorktrees,
   removeGitWorktree,
 } from './worktrees.js'
@@ -817,6 +821,20 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'inspect_worktree',
+      description: 'Inspect one git worktree by path or branch name.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reference: { type: 'string', description: 'Worktree path or branch name.' },
+        },
+        required: ['reference'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_notebook_cells',
       description: 'List notebook cells in a .ipynb file.',
       parameters: {
@@ -958,6 +976,21 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'create_team_tasks',
+      description: 'Create one background RoyCode task per member of a local team.',
+      parameters: {
+        type: 'object',
+        properties: {
+          team: { type: 'string', description: 'Team name.' },
+          prompt: { type: 'string', description: 'Shared task prompt.' },
+        },
+        required: ['team', 'prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_bridges',
       description: 'List configured remote RoyCode bridge endpoints.',
       parameters: { type: 'object', properties: {} },
@@ -1062,6 +1095,22 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'lsp_implementation',
+      description: 'Resolve implementation locations at one file position.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          line: { type: 'number' },
+          column: { type: 'number' },
+        },
+        required: ['path', 'line', 'column'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'lsp_references',
       description: 'Find references at one file position.',
       parameters: {
@@ -1070,6 +1119,23 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
           path: { type: 'string' },
           line: { type: 'number' },
           column: { type: 'number' },
+        },
+        required: ['path', 'line', 'column'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'lsp_rename_preview',
+      description: 'Preview rename locations for one symbol and optionally include a target new name.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          line: { type: 'number' },
+          column: { type: 'number' },
+          newName: { type: 'string' },
         },
         required: ['path', 'line', 'column'],
       },
@@ -1102,6 +1168,24 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
           path: { type: 'string' },
         },
         required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'lsp_workspace_symbols',
+      description: 'Search workspace symbols by text query.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string' },
+          path: {
+            type: 'string',
+            description: 'Optional file path used to anchor the workspace language service.',
+          },
+        },
+        required: ['query'],
       },
     },
   },
@@ -1954,6 +2038,13 @@ async function executeTool(
       )
       return JSON.stringify({ success: true, path: String(input.path ?? '') }, null, 2)
     }
+    case 'inspect_worktree': {
+      const worktree = await inspectGitWorktree(workspaceRoot, String(input.reference ?? ''))
+      if (!worktree) {
+        throw new Error(`Worktree not found: ${String(input.reference ?? '')}`)
+      }
+      return JSON.stringify(worktree, null, 2)
+    }
     case 'list_notebook_cells': {
       const cells = await listNotebookCells(
         workspaceRoot,
@@ -2070,6 +2161,46 @@ async function executeTool(
       }
       return JSON.stringify({ team: team.name, results: memberResults }, null, 2)
     }
+    case 'create_team_tasks': {
+      const team = await getTeam(String(input.team ?? ''))
+      if (!team) {
+        throw new Error(`Team not found: ${String(input.team ?? '')}`)
+      }
+      const createdTasks = []
+      for (const member of team.members) {
+        const localAgent = member.agentName
+          ? await getLocalAgent(member.agentName, workspaceRoot, request.cwd ?? '.')
+          : null
+        const memberPrompt = [
+          member.rolePrompt ? `Role: ${member.rolePrompt}` : '',
+          `Team: ${team.name}`,
+          `Member: ${member.name}`,
+          String(input.prompt ?? ''),
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+        const task = await createTask({
+          title: `${team.name}:${member.name}`,
+          prompt: memberPrompt,
+          workspaceRoot,
+          accessMode: settings.accessMode,
+          safeWriteMode: settings.safeWriteMode,
+          providerId: request.providerId,
+          model: localAgent?.model || request.model,
+          cwd: request.cwd ?? '.',
+          baseMessages: request.messages.slice(-6),
+        })
+        launchTaskRunner(task.id)
+        createdTasks.push({
+          member: member.name,
+          agent: localAgent?.name ?? member.agentName ?? null,
+          id: task.id,
+          status: task.status,
+          logPath: task.logPath,
+        })
+      }
+      return JSON.stringify({ team: team.name, tasks: createdTasks }, null, 2)
+    }
     case 'list_bridges': {
       const bridges = await listBridges()
       return JSON.stringify(bridges, null, 2)
@@ -2116,6 +2247,16 @@ async function executeTool(
       })
       return JSON.stringify(definitions, null, 2)
     }
+    case 'lsp_implementation': {
+      const implementations = await getLspImplementations({
+        workspaceRoot,
+        filePath: String(input.path ?? ''),
+        line: Number(input.line ?? 1),
+        column: Number(input.column ?? 1),
+        accessMode,
+      })
+      return JSON.stringify(implementations, null, 2)
+    }
     case 'lsp_references': {
       const references = await getLspReferences({
         workspaceRoot,
@@ -2125,6 +2266,17 @@ async function executeTool(
         accessMode,
       })
       return JSON.stringify(references, null, 2)
+    }
+    case 'lsp_rename_preview': {
+      const preview = await getLspRenamePreview({
+        workspaceRoot,
+        filePath: String(input.path ?? ''),
+        line: Number(input.line ?? 1),
+        column: Number(input.column ?? 1),
+        accessMode,
+        newName: input.newName ? String(input.newName) : undefined,
+      })
+      return JSON.stringify(preview, null, 2)
     }
     case 'lsp_hover': {
       const hover = await getLspHover({
@@ -2142,6 +2294,15 @@ async function executeTool(
         String(input.path ?? ''),
         accessMode,
       )
+      return JSON.stringify(symbols, null, 2)
+    }
+    case 'lsp_workspace_symbols': {
+      const symbols = await getLspWorkspaceSymbols({
+        workspaceRoot,
+        filePath: input.path ? String(input.path) : undefined,
+        query: String(input.query ?? ''),
+        accessMode,
+      })
       return JSON.stringify(symbols, null, 2)
     }
     default:

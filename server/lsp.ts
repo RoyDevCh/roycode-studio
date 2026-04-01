@@ -27,6 +27,27 @@ export type LspDocumentSymbol = {
   column: number
 }
 
+export type LspWorkspaceSymbol = {
+  name: string
+  kind: string
+  file: string
+  line: number
+  column: number
+  containerName?: string
+}
+
+export type LspRenamePreview = {
+  canRename: boolean
+  displayName?: string
+  localizedErrorMessage?: string
+  locations: Array<
+    LspLocation & {
+      preview: string
+      newText?: string
+    }
+  >
+}
+
 const TS_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts'])
 
 function ensureSupportedFile(filePath: string): void {
@@ -224,6 +245,39 @@ export async function getLspReferences(args: {
     .filter((item): item is LspLocation => Boolean(item))
 }
 
+export async function getLspImplementations(args: {
+  workspaceRoot: string
+  filePath: string
+  line: number
+  column: number
+  accessMode: AccessMode
+}): Promise<LspLocation[]> {
+  const relativePath = path.relative(
+    args.workspaceRoot,
+    resolveWorkspacePath(args.workspaceRoot, args.filePath, '.', args.accessMode),
+  )
+  const { service, absolutePath } = buildLanguageService(args.workspaceRoot, relativePath)
+  const program = service.getProgram()
+  const sourceFile = program?.getSourceFile(absolutePath)
+  if (!program || !sourceFile) {
+    return []
+  }
+  const offset = resolveOffset(sourceFile, args.line, args.column)
+  const implementations = service.getImplementationAtPosition(absolutePath, offset) ?? []
+  return implementations
+    .map(item => {
+      const file = program.getSourceFile(item.fileName)
+      if (!file) {
+        return null
+      }
+      return {
+        file: item.fileName,
+        ...toLineColumn(file, item.textSpan.start, item.textSpan.start + item.textSpan.length),
+      }
+    })
+    .filter((item): item is LspLocation => Boolean(item))
+}
+
 export async function getLspHover(args: {
   workspaceRoot: string
   filePath: string
@@ -294,6 +348,134 @@ export async function getLspDocumentSymbols(
   }
 
   return symbols
+}
+
+export async function getLspWorkspaceSymbols(args: {
+  workspaceRoot: string
+  filePath?: string
+  query: string
+  accessMode: AccessMode
+}): Promise<LspWorkspaceSymbol[]> {
+  let entryFile = args.filePath
+    ? path.relative(
+        args.workspaceRoot,
+        resolveWorkspacePath(args.workspaceRoot, args.filePath, '.', args.accessMode),
+      )
+    : ''
+  if (!entryFile) {
+    const configPath =
+      ts.findConfigFile(args.workspaceRoot, ts.sys.fileExists, 'tsconfig.json') ??
+      ts.findConfigFile(args.workspaceRoot, ts.sys.fileExists, 'jsconfig.json')
+    if (configPath) {
+      const configFile = ts.readConfigFile(configPath, ts.sys.readFile)
+      if (!configFile.error) {
+        const parsed = ts.parseJsonConfigFileContent(
+          configFile.config,
+          ts.sys,
+          path.dirname(configPath),
+        )
+        entryFile =
+          parsed.fileNames.find(fileName => TS_EXTENSIONS.has(path.extname(fileName).toLowerCase())) ??
+          ''
+      }
+    }
+  }
+  if (!entryFile) {
+    throw new Error('Could not determine a TypeScript or JavaScript entry file for workspace symbols')
+  }
+  const { service } = buildLanguageService(args.workspaceRoot, entryFile)
+  const program = service.getProgram()
+  if (!program) {
+    return []
+  }
+
+  const symbols = service.getNavigateToItems(args.query) ?? []
+  const results: LspWorkspaceSymbol[] = []
+  for (const item of symbols) {
+    const file = program.getSourceFile(item.fileName)
+    if (!file) {
+      continue
+    }
+    results.push({
+      name: item.name,
+      kind: item.kind,
+      file: item.fileName,
+      containerName: item.containerName || undefined,
+      ...toLineColumn(file, item.textSpan.start),
+    })
+  }
+  return results
+}
+
+export async function getLspRenamePreview(args: {
+  workspaceRoot: string
+  filePath: string
+  line: number
+  column: number
+  accessMode: AccessMode
+  newName?: string
+}): Promise<LspRenamePreview> {
+  const relativePath = path.relative(
+    args.workspaceRoot,
+    resolveWorkspacePath(args.workspaceRoot, args.filePath, '.', args.accessMode),
+  )
+  const { service, absolutePath } = buildLanguageService(args.workspaceRoot, relativePath)
+  const program = service.getProgram()
+  const sourceFile = program?.getSourceFile(absolutePath)
+  if (!program || !sourceFile) {
+    return {
+      canRename: false,
+      localizedErrorMessage: 'Source file not loaded in local LSP service',
+      locations: [],
+    }
+  }
+
+  const offset = resolveOffset(sourceFile, args.line, args.column)
+  const renameInfo = service.getRenameInfo(absolutePath, offset, {
+    allowRenameOfImportPath: true,
+  })
+  if (!renameInfo.canRename) {
+    return {
+      canRename: false,
+      localizedErrorMessage: renameInfo.localizedErrorMessage,
+      locations: [],
+    }
+  }
+
+  const locations = service.findRenameLocations(
+    absolutePath,
+    offset,
+    false,
+    false,
+    true,
+  )
+
+  const previewLocations: Array<
+    LspLocation & {
+      preview: string
+      newText?: string
+    }
+  > = []
+  for (const location of locations ?? []) {
+    const file = program.getSourceFile(location.fileName)
+    if (!file) {
+      continue
+    }
+    const start = location.textSpan.start
+    const end = start + location.textSpan.length
+    previewLocations.push({
+      file: location.fileName,
+      preview: file.text.slice(start, end),
+      newText: args.newName?.trim() || undefined,
+      ...toLineColumn(file, start, end),
+    })
+  }
+
+  return {
+    canRename: true,
+    displayName: renameInfo.displayName,
+    locations: previewLocations,
+  }
 }
 
 export async function readNotebookFilePreview(

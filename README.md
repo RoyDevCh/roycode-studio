@@ -15,6 +15,7 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - An Electron desktop shell with a native app window, app menu, and local backend boot
 - Desktop builds now compile the backend into `dist-server/` and can produce a portable Windows executable
 - A terminal-first `RoyCode CLI` that behaves much closer to Claude Code than the WebUI does
+- The `roycode` launcher now opens an Ink-style terminal UI by default in interactive terminals, while `--plain` still gives the direct line-based CLI
 - RoyCode CLI now supports saved sessions, `/resume`, `/title`, `/sessions`, and one-shot `--prompt` runs
 - RoyCode CLI now supports Claude-style `-p` / `--print` runs with optional JSON output
 - RoyCode CLI includes local slash commands for files, search, shell, pending changes, Git, provider/model switching, and review/fix/plan/explain macros
@@ -26,12 +27,12 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - RoyCode now supports Claude-style `.claude/rules`, `.claude/output-styles`, and `.claude/agent-memory`, including nested project discovery from the current `cwd`
 - RoyCode now supports project `.mcp.json` auto-discovery and can merge those MCP servers with RoyCode's saved local MCP registry
 - RoyCode now supports plugin-provided output styles from `output-styles/*.md`, in addition to built-in and `.claude/output-styles` styles
-- RoyCode now includes a local git `worktree` workflow and `teleport` shortcuts for switching the session into another worktree quickly
+- RoyCode now includes a local git `worktree` workflow, worktree inspection, switching shortcuts, and `teleport` shortcuts for moving the session into another worktree quickly
 - RoyCode now includes a local notebook runtime for `.ipynb` cell listing, reading, editing, insertion, and deletion with the same safe-write flow as normal files
-- RoyCode now includes local `teams` so several named subagents or roles can be grouped and run together
+- RoyCode now includes local `teams` so several named subagents or roles can be grouped, run together, or launched as parallel background tasks
 - RoyCode now includes a self-hosted `bridge` layer that can talk to another RoyCode server over HTTP for health, context, and remote command execution
 - RoyCode now includes a self-hosted `marketplace` registry for installable local skills or plugins from a path or git URL
-- RoyCode now includes a local TypeScript/JavaScript `LSP` subset for diagnostics, definitions, references, hover, and document symbols
+- RoyCode now includes a local TypeScript/JavaScript `LSP` subset for diagnostics, definitions, implementations, references, rename preview, hover, document symbols, and workspace symbols
 - RoyCode now ships a bundled local skill set adapted from the source snapshot, including `simplify`, `verify`, `remember`, `update-config`, `skillify`, `batch`, `debug`, `keybindings`, `stuck`, and `lorem-ipsum`
 - RoyCode CLI now supports local plugins with markdown command loading, direct `/plugin-name:command` execution, and plugin-provided skills
 - RoyCode now supports user-configured local MCP servers over `stdio` and Streamable HTTP, including MCP tools, prompts, and resources
@@ -106,6 +107,12 @@ Terminal CLI:
 npm run cli
 ```
 
+Ink-style TUI:
+
+```bash
+npm run tui
+```
+
 Global terminal command:
 
 ```bash
@@ -131,6 +138,7 @@ roycode -p "Summarize the current workspace status in 3 bullets"
 roycode --skill code-review
 roycode --resume latest
 roycode-full
+roycode --plain
 roycode --prompt "Look up the latest public docs for OpenAI responses API and summarize the key points"
 ```
 
@@ -166,11 +174,16 @@ Useful CLI flows:
 /mcp call smoke echo {"text":"hello"}
 /hook add instructions-loaded "Write-Output hook-fired" --match CLAUDE.md
 /worktree
+/worktree show feature-branch
 /worktree add "..\\repo-wt" feature-branch
 /teleport worktree feature-branch
 /notebook cells notebook.ipynb
 /lsp defs src/index.ts 10 5
+/lsp impl src/index.ts 10 5
+/lsp rename-preview src/index.ts 10 5 RenamedSymbol
+/lsp workspace-symbols handler
 /team create reviewers reviewer,security
+/team task reviewers "Audit the current auth changes"
 /bridge add local http://127.0.0.1:8787
 /marketplace add smoke-skill auto "C:\\path\\to\\skill"
 /task start "Review the workspace and list the top risks"

@@ -12,6 +12,12 @@ export type GitWorktreeRecord = {
   prunable: boolean
 }
 
+export type GitWorktreeDetails = GitWorktreeRecord & {
+  current: boolean
+  statusSummary: string
+  changedFiles: number
+}
+
 async function runGit(
   workspaceRoot: string,
   args: string[],
@@ -22,6 +28,39 @@ async function runGit(
   return new Promise((resolve, reject) => {
     const child = spawn('git', args, {
       cwd: resolvedCwd,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString()
+    })
+
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString()
+    })
+
+    child.on('error', reject)
+    child.on('close', exitCode => {
+      resolve({
+        stdout,
+        stderr,
+        exitCode: exitCode ?? 1,
+      })
+    })
+  })
+}
+
+async function runGitAtPath(
+  targetPath: string,
+  args: string[],
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', args, {
+      cwd: targetPath,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
@@ -197,4 +236,36 @@ export async function findGitWorktree(
     worktrees.find(item => item.branch?.toLowerCase().includes(normalized)) ??
     null
   )
+}
+
+export async function inspectGitWorktree(
+  workspaceRoot: string,
+  reference: string,
+): Promise<GitWorktreeDetails | null> {
+  const worktree = await findGitWorktree(workspaceRoot, reference)
+  if (!worktree) {
+    return null
+  }
+
+  const [statusResult, currentResult] = await Promise.all([
+    runGitAtPath(worktree.path, ['status', '--short', '--branch']),
+    runGitAtPath(workspaceRoot, ['rev-parse', '--show-toplevel']),
+  ])
+  if (statusResult.exitCode !== 0) {
+    throw new Error(statusResult.stderr || statusResult.stdout || 'Failed to inspect git worktree')
+  }
+
+  const statusLines = statusResult.stdout
+    .split(/\r?\n/)
+    .map(line => line.trimEnd())
+    .filter(Boolean)
+  const changedFiles = statusLines.filter(line => !line.startsWith('##')).length
+  const currentRoot = currentResult.exitCode === 0 ? currentResult.stdout.trim() : ''
+
+  return {
+    ...worktree,
+    current: path.resolve(worktree.path) === path.resolve(currentRoot || workspaceRoot),
+    statusSummary: statusLines[0] || '## detached',
+    changedFiles,
+  }
 }
