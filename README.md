@@ -82,6 +82,58 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - Draft patches can be split into chunks so you can keep, preview, or stage only selected hunks
 - Multi-session tabs so each chat can keep its own model, file, and terminal context
 
+## New Machine Setup
+
+The GitHub repo is enough to deploy RoyCode on another computer, but that machine still needs a local runtime first.
+
+Prerequisites:
+
+- Windows is the primary tested target
+- Node.js and npm must already be installed
+- Git is recommended so you can clone and update the repo
+- Your model API keys must be configured again on the new machine after first launch
+
+Recommended source install flow:
+
+```bash
+git clone https://github.com/RoyDevCh/roycode-studio.git
+cd roycode-studio
+npm install
+npm run build
+```
+
+If you want the global terminal command on that machine too:
+
+```bash
+npm run install:command
+roycode
+roycode-full
+```
+
+If you only want the browser app on the new machine:
+
+```bash
+npm run start
+```
+
+If you want the desktop app from source:
+
+```bash
+npm run desktop
+```
+
+If you want a portable Windows package that can be copied to another machine:
+
+```bash
+npm run desktop:dist
+```
+
+After first launch on a new computer:
+
+- add your provider API keys again
+- choose the workspace you want to use
+- reopen the terminal once if `roycode` was just installed into PATH
+
 ## Run It
 
 ```bash
