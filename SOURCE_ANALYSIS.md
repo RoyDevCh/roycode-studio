@@ -188,6 +188,9 @@ Below is the practical comparison between the recovered Claude Code snapshot and
 | Worktree workflow | Yes | Partially | RoyCode now supports local git worktree listing, inspection, creation, removal, switching, and teleport-style workspace switching, but not the snapshot's full managed isolation model. |
 | Notebook editing | Yes | Partially | RoyCode now supports local `.ipynb` cell listing, reading, insertion, replacement, and deletion, but not notebook kernel execution or rich-output replay. |
 | LSP / code intelligence | Yes | Partially | RoyCode now has a local TypeScript/JavaScript LSP subset for diagnostics, definitions, implementations, references, rename preview, rename apply through safe-write or direct writes, hover, document symbols, and workspace symbols; broader language-server coverage is still absent. |
+| Structured user questions | Yes | Partially | The source snapshot includes explicit interactive question tooling; RoyCode now supports a local `ask_user_question` path in the CLI and TUI, but not every surface can interrupt and collect answers yet. |
+| Scheduled automation / cron | Yes | Partially | The source snapshot has cron-style scheduling helpers; RoyCode now supports workspace-local scheduled prompts, a lightweight scheduler, and `/cron` management commands, but not the full official automation/product layer. |
+| Plan / execution modes | Yes | Partially | RoyCode now supports a read-only `plan-mode` with blocked write paths and a `worktree-mode` session flow, but it still does not reproduce every official mode transition or policy nuance. |
 | Conversation workflow commands | Yes | Partially | RoyCode now has `/compact`, `/rewind`, and `/export`, but not the full official Ink session shell. |
 | Structured hooks | Yes | Partially | RoyCode hooks now receive JSON stdin and can return structured JSON results, and they cover a broad local subset of Claude-style lifecycle events and matcher filtering, but they still do not cover every official hook event or decision type. |
 | Remote bridge / direct connect | Yes | Partially | The snapshot contains substantial bridge/remote plumbing; local rebuild focuses on local-first execution. |
@@ -213,6 +216,9 @@ What can be rebuilt locally:
 - local worktree workflows
 - local notebook cell editing
 - local TypeScript/JavaScript code intelligence
+- structured terminal follow-up questions
+- local scheduled prompt automation
+- plan-mode and worktree-mode session flows
 - full local filesystem and shell access
 - Git-aware coding flows
 - model/provider abstraction

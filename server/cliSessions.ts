@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { AgentMessage, AppSettings } from './types.js'
+import type { AgentMessage, AppSettings, ExecutionMode } from './types.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -25,6 +25,10 @@ export type CliSessionRecord = {
   cwd: string
   activeSkills?: string[]
   compactSummaries?: string[]
+  executionMode?: ExecutionMode
+  planFocus?: string
+  worktreeBaseRoot?: string
+  activeWorktreePath?: string
   messages: AgentMessage[]
 }
 

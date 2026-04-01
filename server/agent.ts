@@ -100,6 +100,12 @@ import {
   listGitWorktrees,
   removeGitWorktree,
 } from './worktrees.js'
+import {
+  createCronTask,
+  deleteCronTask,
+  listCronTasks,
+  nextCronRunMs,
+} from './cron.js'
 import type {
   AgentContentPart,
   AgentStreamEvent,
@@ -108,11 +114,16 @@ import type {
   ChatRequest,
   ChatResponse,
   ProviderConfig,
+  StructuredQuestionRequest,
+  StructuredQuestionResponse,
   TodoItem,
 } from './types.js'
 
 type AgentCallbacks = {
   onEvent?: (event: AgentStreamEvent) => void | Promise<void>
+  askQuestions?: (
+    request: StructuredQuestionRequest,
+  ) => Promise<StructuredQuestionResponse>
 }
 
 type ToolCallAccumulator = {
@@ -419,18 +430,71 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
     function: {
       name: 'ask_user_question',
       description:
-        'Record that more human input is needed. In this local runtime, the tool returns a structured question so the assistant can ask the user directly.',
+        'Ask the user one to four short structured questions and continue once their answers are collected.',
       parameters: {
         type: 'object',
         properties: {
-          question: { type: 'string', description: 'The question that should be shown to the user.' },
+          question: {
+            type: 'string',
+            description:
+              'Legacy single-question form. Prefer questions[] for richer structured prompts.',
+          },
+          header: {
+            type: 'string',
+            description: 'Very short header label for the legacy single-question form.',
+          },
           options: {
             type: 'array',
-            items: { type: 'string' },
-            description: 'Optional suggested options for the user.',
+            items: {
+              anyOf: [
+                { type: 'string' },
+                {
+                  type: 'object',
+                  properties: {
+                    label: { type: 'string' },
+                    description: { type: 'string' },
+                  },
+                  required: ['label'],
+                },
+              ],
+            },
+            description: 'Legacy single-question options.',
+          },
+          questions: {
+            type: 'array',
+            description: 'Structured questions to present to the user.',
+            items: {
+              type: 'object',
+              properties: {
+                header: {
+                  type: 'string',
+                  description: 'Very short label shown above the question.',
+                },
+                question: {
+                  type: 'string',
+                  description: 'The question text to ask the user.',
+                },
+                multiSelect: {
+                  type: 'boolean',
+                  description: 'Allow multiple options to be selected.',
+                  default: false,
+                },
+                options: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      label: { type: 'string' },
+                      description: { type: 'string' },
+                    },
+                    required: ['label'],
+                  },
+                },
+              },
+              required: ['header', 'question', 'options'],
+            },
           },
         },
-        required: ['question'],
       },
     },
   },
@@ -626,6 +690,59 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
           prompt: { type: 'string', description: 'Detailed task prompt.' },
         },
         required: ['prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_cron_tasks',
+      description:
+        'List scheduled local cron prompts for the current workspace, including the next run time.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_cron_task',
+      description:
+        'Create a scheduled local cron prompt for this workspace. Use recurring=false for a one-shot reminder.',
+      parameters: {
+        type: 'object',
+        properties: {
+          cron: {
+            type: 'string',
+            description: 'Standard 5-field cron expression in local time.',
+          },
+          prompt: {
+            type: 'string',
+            description: 'Prompt to run whenever the cron schedule fires.',
+          },
+          recurring: {
+            type: 'boolean',
+            description: 'Whether the scheduled prompt should repeat.',
+            default: true,
+          },
+        },
+        required: ['cron', 'prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'delete_cron_task',
+      description: 'Delete one scheduled local cron prompt by id or prefix.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Cron task id or unique prefix.' },
+        },
+        required: ['id'],
       },
     },
   },
@@ -1272,6 +1389,75 @@ function normalizeTodoList(value: unknown): TodoItem[] {
   })
 }
 
+function normalizeStructuredQuestionRequest(
+  input: Record<string, unknown>,
+): StructuredQuestionRequest {
+  const normalizedQuestions = Array.isArray(input.questions)
+    ? input.questions
+    : [
+        {
+          header: String(input.header ?? 'Question').trim() || 'Question',
+          question: String(input.question ?? '').trim(),
+          options: Array.isArray(input.options) ? input.options : [],
+          multiSelect: Boolean(input.multiSelect),
+        },
+      ]
+
+  const questions = normalizedQuestions
+    .filter(item => Boolean(item && typeof item === 'object'))
+    .map((item, index) => {
+      const record = item as Record<string, unknown>
+      const question = String(record.question ?? '').trim()
+      const header =
+        String(record.header ?? `Question ${index + 1}`).trim() || `Question ${index + 1}`
+      const options = Array.isArray(record.options)
+        ? record.options
+            .map(option => {
+              if (typeof option === 'string') {
+                const label = option.trim()
+                return label ? { label } : null
+              }
+              if (!option || typeof option !== 'object' || Array.isArray(option)) {
+                return null
+              }
+              const value = option as Record<string, unknown>
+              const label = String(value.label ?? '').trim()
+              if (!label) {
+                return null
+              }
+              const description = String(value.description ?? '').trim()
+              return {
+                label,
+                description: description || undefined,
+              }
+            })
+            .filter(
+              (
+                option,
+              ): option is {
+                label: string
+                description?: string
+              } => Boolean(option),
+            )
+        : []
+
+      return {
+        header,
+        question,
+        options,
+        multiSelect: Boolean(record.multiSelect),
+      }
+    })
+    .filter(item => item.question && item.options.length >= 2)
+    .slice(0, 4)
+
+  if (!questions.length) {
+    throw new Error('At least one valid question with 2 or more options is required')
+  }
+
+  return { questions }
+}
+
 async function runSubagentPrompt(
   provider: ProviderConfig,
   settings: AppSettings,
@@ -1283,6 +1469,7 @@ async function runSubagentPrompt(
     cwdOverride?: string
     systemAddenda?: string[]
   },
+  callbacks?: AgentCallbacks,
 ): Promise<ChatResponse> {
   const targetCwd = options?.cwdOverride || request.cwd || '.'
   const agentMemory = options?.agentDefinition?.memory
@@ -1329,26 +1516,31 @@ async function runSubagentPrompt(
     ? `${options.agentDefinition.initialPrompt}\n\n${prompt}`
     : prompt
 
-  return runAgentChatInternal(provider, settings, {
-    providerId: request.providerId,
-    model: options?.modelOverride || options?.agentDefinition?.model || request.model,
-    cwd: targetCwd,
-    systemAddenda: [
-      ...(request.systemAddenda ?? []),
-      'You are running in an isolated subagent execution context. Complete the focused task and return only the result needed by the parent agent.',
-      ...agentAddenda,
-      ...(options?.systemAddenda ?? []),
-    ],
-    allowedTools: options?.agentDefinition?.tools,
-    disallowedTools: options?.agentDefinition?.disallowedTools,
-    maxAgentSteps: options?.agentDefinition?.maxTurns,
-    messages: [
-      {
-        role: 'user',
-        content: composedPrompt,
-      },
-    ],
-  })
+  return runAgentChatInternal(
+    provider,
+    settings,
+    {
+      providerId: request.providerId,
+      model: options?.modelOverride || options?.agentDefinition?.model || request.model,
+      cwd: targetCwd,
+      systemAddenda: [
+        ...(request.systemAddenda ?? []),
+        'You are running in an isolated subagent execution context. Complete the focused task and return only the result needed by the parent agent.',
+        ...agentAddenda,
+        ...(options?.systemAddenda ?? []),
+      ],
+      allowedTools: options?.agentDefinition?.tools,
+      disallowedTools: options?.agentDefinition?.disallowedTools,
+      maxAgentSteps: options?.agentDefinition?.maxTurns,
+      messages: [
+        {
+          role: 'user',
+          content: composedPrompt,
+        },
+      ],
+    },
+    callbacks,
+  )
 }
 
 function formatInlineSkillResult(
@@ -1443,6 +1635,7 @@ async function executeTool(
   input: Record<string, unknown>,
   settings: AppSettings,
   request: ChatRequest,
+  callbacks?: AgentCallbacks,
 ): Promise<string> {
   const accessMode = settings.accessMode
 
@@ -1641,20 +1834,27 @@ async function executeTool(
       )
     }
     case 'ask_user_question': {
-      const question = String(input.question ?? '').trim()
-      if (!question) {
-        throw new Error('Question is required')
+      const normalizedRequest = normalizeStructuredQuestionRequest(input)
+      if (!callbacks?.askQuestions) {
+        return JSON.stringify(
+          {
+            success: false,
+            interactive: false,
+            questions: normalizedRequest.questions,
+            instructions:
+              'This runtime cannot interrupt for structured questions right now. Ask the user directly in the next assistant response and wait for their answer.',
+          },
+          null,
+          2,
+        )
       }
+      const answers = await callbacks.askQuestions(normalizedRequest)
       return JSON.stringify(
         {
           success: true,
-          interactive: false,
-          question,
-          options: Array.isArray(input.options)
-            ? input.options.map(item => String(item)).filter(Boolean)
-            : [],
-          instructions:
-            'Ask the user this question directly in the next assistant response and wait for their answer.',
+          interactive: true,
+          questions: normalizedRequest.questions,
+          answers: answers.answers,
         },
         null,
         2,
@@ -1745,6 +1945,7 @@ async function executeTool(
                   : []),
               ],
             },
+            callbacks,
           )
           return JSON.stringify(
             {
@@ -1796,6 +1997,7 @@ async function executeTool(
                   : []),
               ],
             },
+            callbacks,
           )
           return JSON.stringify(
             {
@@ -1849,6 +2051,7 @@ async function executeTool(
                 : []),
             ],
           },
+          callbacks,
         )
         return JSON.stringify(
           {
@@ -1902,14 +2105,21 @@ async function executeTool(
       if (input.agent_name && !namedAgent) {
         throw new Error(`Agent not found: ${String(input.agent_name)}`)
       }
-      const response = await runSubagentPrompt(provider, settings, request, prompt, {
-        agentDefinition: namedAgent ?? undefined,
-        modelOverride: input.model ? String(input.model) : undefined,
-        cwdOverride: input.cwd ? String(input.cwd) : undefined,
-        systemAddenda: Array.isArray(input.system_addenda)
-          ? input.system_addenda.map(item => String(item))
-          : undefined,
-      })
+      const response = await runSubagentPrompt(
+        provider,
+        settings,
+        request,
+        prompt,
+        {
+          agentDefinition: namedAgent ?? undefined,
+          modelOverride: input.model ? String(input.model) : undefined,
+          cwdOverride: input.cwd ? String(input.cwd) : undefined,
+          systemAddenda: Array.isArray(input.system_addenda)
+            ? input.system_addenda.map(item => String(item))
+            : undefined,
+        },
+        callbacks,
+      )
       return JSON.stringify(response, null, 2)
     }
     case 'list_tasks': {
@@ -1952,6 +2162,49 @@ async function executeTool(
           title: task.title,
           status: task.status,
           logPath: task.logPath,
+        },
+        null,
+        2,
+      )
+    }
+    case 'list_cron_tasks': {
+      const tasks = await listCronTasks(workspaceRoot)
+      return JSON.stringify(tasks, null, 2)
+    }
+    case 'create_cron_task': {
+      const task = await createCronTask({
+        cron: String(input.cron ?? '').trim(),
+        prompt: String(input.prompt ?? ''),
+        recurring: input.recurring !== false,
+        workspaceRoot,
+        accessMode: settings.accessMode,
+        safeWriteMode: settings.safeWriteMode,
+        providerId: request.providerId,
+        model: request.model,
+        cwd: request.cwd ?? '.',
+      })
+      const nextRunAt = nextCronRunMs(task.cron, task.createdAt)
+      return JSON.stringify(
+        {
+          id: task.id,
+          cron: task.cron,
+          prompt: task.prompt,
+          recurring: task.recurring !== false,
+          nextRunAt: nextRunAt ? new Date(nextRunAt).toISOString() : null,
+        },
+        null,
+        2,
+      )
+    }
+    case 'delete_cron_task': {
+      const deleted = await deleteCronTask(workspaceRoot, String(input.id ?? ''))
+      if (!deleted) {
+        throw new Error(`Scheduled cron task not found: ${String(input.id ?? '')}`)
+      }
+      return JSON.stringify(
+        {
+          success: true,
+          id: deleted.id,
         },
         null,
         2,
@@ -2169,9 +2422,16 @@ async function executeTool(
         ]
           .filter(Boolean)
           .join('\n\n')
-        const result = await runSubagentPrompt(provider, settings, request, memberPrompt, {
-          agentDefinition: localAgent ?? undefined,
-        })
+        const result = await runSubagentPrompt(
+          provider,
+          settings,
+          request,
+          memberPrompt,
+          {
+            agentDefinition: localAgent ?? undefined,
+          },
+          callbacks,
+        )
         memberResults.push({
           member: member.name,
           agent: localAgent?.name ?? member.agentName ?? null,
@@ -2531,6 +2791,7 @@ async function runAgentChatInternal(
         parsedArguments,
         settings,
         request,
+        callbacks,
       )
 
       toolEvents.push({

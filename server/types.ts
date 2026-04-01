@@ -27,6 +27,8 @@ export type ProviderPreset = {
 
 export type AccessMode = 'workspace' | 'unrestricted'
 
+export type ExecutionMode = 'default' | 'plan' | 'worktree'
+
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
 export type TodoItem = {
@@ -84,6 +86,26 @@ export type AgentToolEvent = {
   name: string
   input: string
   output: string
+}
+
+export type StructuredQuestionOption = {
+  label: string
+  description?: string
+}
+
+export type StructuredQuestionPrompt = {
+  header: string
+  question: string
+  options: StructuredQuestionOption[]
+  multiSelect?: boolean
+}
+
+export type StructuredQuestionRequest = {
+  questions: StructuredQuestionPrompt[]
+}
+
+export type StructuredQuestionResponse = {
+  answers: Record<string, string>
 }
 
 export type ChatRequest = {

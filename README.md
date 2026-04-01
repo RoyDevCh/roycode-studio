@@ -36,6 +36,10 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - RoyCode now ships a bundled local skill set adapted from the source snapshot, including `simplify`, `verify`, `remember`, `update-config`, `skillify`, `batch`, `debug`, `keybindings`, `stuck`, and `lorem-ipsum`
 - RoyCode CLI now supports local plugins with markdown command loading, direct `/plugin-name:command` execution, and plugin-provided skills
 - RoyCode now supports user-configured local MCP servers over `stdio` and Streamable HTTP, including MCP tools, prompts, and resources
+- RoyCode now supports structured in-terminal follow-up questions through the shared `ask_user_question` tool path, so a running agent can request constrained answers instead of only free-form text
+- RoyCode now supports local scheduled prompts with `/cron`, workspace-local `.claude/scheduled_tasks.json`, and a lightweight background scheduler that can fire saved prompts into background tasks
+- RoyCode now supports `plan-mode` for read-only planning passes, with both agent-tool and direct-command write paths blocked until you exit the mode
+- RoyCode now supports `worktree-mode`, which can temporarily bind a session to an isolated git worktree and restore the base workspace later
 - RoyCode now builds a richer segmented system prompt with workspace instructions, workspace memory, task policy, skill policy, and runtime policy sections
 - RoyCode can auto-load workspace instruction files such as `CLAUDE.md`, `ROYCODE.md`, `.claude/INSTRUCTIONS.md`, and `.github/copilot-instructions.md`
 - RoyCode includes persistent workspace memory files and CLI memory commands so stable project context can survive across sessions
@@ -240,6 +244,8 @@ npm run tui
 
 The TUI now keeps a small workspace/session panel, shortcut rail, recent input list, and a live output pane so the default `roycode` launcher feels closer to a terminal application instead of a plain line prompt.
 
+The TUI also now surfaces the current execution mode from `/status`, plus direct shortcuts for `/cron`, `/worktree`, and `/plan-mode status`, so it behaves more like a lightweight terminal app shell than a plain wrapper.
+
 Global terminal command:
 
 ```bash
@@ -304,6 +310,12 @@ Useful CLI flows:
 /worktree show feature-branch
 /worktree add "..\\repo-wt" feature-branch
 /teleport worktree feature-branch
+/plan-mode enter review-risky-refactor
+/plan-mode exit
+/worktree-mode enter feature-branch
+/worktree-mode exit
+/cron
+/cron add "0 9 * * 1-5" "Review workspace changes and summarize risks"
 /notebook cells notebook.ipynb
 /lsp defs src/index.ts 10 5
 /lsp impl src/index.ts 10 5

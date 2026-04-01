@@ -18,6 +18,26 @@ export type GitWorktreeDetails = GitWorktreeRecord & {
   changedFiles: number
 }
 
+function normalizeGitSpawnError(error: unknown): Error {
+  const message =
+    error && typeof error === 'object' && 'message' in error
+      ? String((error as { message?: unknown }).message ?? '')
+      : typeof error === 'string'
+        ? error
+        : ''
+  if (
+    error &&
+    typeof error === 'object' &&
+    (('code' in error && (error as { code?: unknown }).code === 'EPERM') ||
+      message.toUpperCase().includes('EPERM'))
+  ) {
+    return new Error(
+      'Unable to execute git from the current runtime (spawn EPERM). Git worktree commands may be blocked by sandbox or system policy.',
+    )
+  }
+  return error instanceof Error ? error : new Error('Failed to execute git')
+}
+
 async function runGit(
   workspaceRoot: string,
   args: string[],
@@ -26,11 +46,17 @@ async function runGit(
   const resolvedCwd = resolveWorkspacePath(workspaceRoot, '.', cwd, 'workspace')
 
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, {
-      cwd: resolvedCwd,
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    let child
+    try {
+      child = spawn('git', args, {
+        cwd: resolvedCwd,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    } catch (error) {
+      reject(normalizeGitSpawnError(error))
+      return
+    }
 
     let stdout = ''
     let stderr = ''
@@ -43,7 +69,9 @@ async function runGit(
       stderr += chunk.toString()
     })
 
-    child.on('error', reject)
+    child.on('error', error => {
+      reject(normalizeGitSpawnError(error))
+    })
     child.on('close', exitCode => {
       resolve({
         stdout,
@@ -59,11 +87,17 @@ async function runGitAtPath(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve, reject) => {
-    const child = spawn('git', args, {
-      cwd: targetPath,
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    let child
+    try {
+      child = spawn('git', args, {
+        cwd: targetPath,
+        env: process.env,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+    } catch (error) {
+      reject(normalizeGitSpawnError(error))
+      return
+    }
 
     let stdout = ''
     let stderr = ''
@@ -76,7 +110,9 @@ async function runGitAtPath(
       stderr += chunk.toString()
     })
 
-    child.on('error', reject)
+    child.on('error', error => {
+      reject(normalizeGitSpawnError(error))
+    })
     child.on('close', exitCode => {
       resolve({
         stdout,

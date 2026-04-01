@@ -171,13 +171,27 @@ import {
   pruneGitWorktrees,
   removeGitWorktree,
 } from './worktrees.js'
+import {
+  cronToHuman,
+  createCronTask,
+  deleteCronTask,
+  listCronTasks,
+  registerCronWorkspace,
+  runDueCronTasks,
+  startCronScheduler,
+  stopCronScheduler,
+} from './cron.js'
 import type {
   AccessMode,
   AgentMessage,
   AppSettings,
+  ExecutionMode,
   FileNode,
   PendingChange,
   ProviderConfig,
+  StructuredQuestionPrompt,
+  StructuredQuestionRequest,
+  StructuredQuestionResponse,
   TodoItem,
 } from './types.js'
 
@@ -223,6 +237,10 @@ type CliState = {
   sessionCreatedAt: string
   explicitTitle: boolean
   sessionTouched: boolean
+  executionMode: ExecutionMode
+  planFocus?: string
+  worktreeBaseRoot?: string
+  activeWorktreePath?: string
 }
 
 const MAX_ATTACHMENT_CHARS = 12_000
@@ -239,6 +257,8 @@ const YELLOW = '\x1b[33m'
 const BLUE = '\x1b[34m'
 const MAGENTA = '\x1b[35m'
 const CYAN = '\x1b[36m'
+
+let activeReadline: ReturnType<typeof createInterface> | null = null
 
 function supportsColor(): boolean {
   return process.stdout.isTTY === true
@@ -340,6 +360,7 @@ function createFreshState(settings: AppSettings): CliState {
     sessionCreatedAt: new Date().toISOString(),
     explicitTitle: false,
     sessionTouched: false,
+    executionMode: 'default',
   }
 }
 
@@ -349,7 +370,8 @@ function shouldPersistSession(state: CliState): boolean {
     state.messages.length > 0 ||
     state.compactSummaries.length > 0 ||
     state.explicitTitle ||
-    state.sessionTitle !== 'New session'
+    state.sessionTitle !== 'New session' ||
+    state.executionMode !== 'default'
   )
 }
 
@@ -391,7 +413,9 @@ function buildPromptLabel(state: CliState): string {
   const provider = getSelectedProvider(state.settings)
   const model = resolveModel(state.settings, provider)
   const shortModel = model.length > 24 ? `${model.slice(0, 24)}...` : model
-  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)} ${cyan('> ')}`
+  const modeSuffix =
+    state.executionMode === 'default' ? '' : ` ${yellow(`[${describeExecutionMode(state)}]`)}`
+  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)}${modeSuffix} ${cyan('> ')}`
 }
 
 function normalizeCommand(input: string): {
@@ -523,6 +547,254 @@ async function copyTextToClipboard(text: string): Promise<void> {
   })
 }
 
+function describeExecutionMode(state: CliState): string {
+  if (state.executionMode === 'plan') {
+    return state.planFocus?.trim()
+      ? `plan (${state.planFocus.trim()})`
+      : 'plan'
+  }
+  if (state.executionMode === 'worktree') {
+    return state.activeWorktreePath
+      ? `worktree (${state.activeWorktreePath})`
+      : 'worktree'
+  }
+  return 'default'
+}
+
+function buildModeSystemAddenda(state: CliState): {
+  extraSystemAddenda: string[]
+  disallowedTools: string[]
+} {
+  if (state.executionMode === 'plan') {
+    return {
+      extraSystemAddenda: [
+        'You are in RoyCode plan mode.',
+        'Treat this as a read-only planning pass: inspect, analyze, and propose work, but do not make changes.',
+        'Do not write files, edit notebooks, change config, create worktrees, schedule tasks, or run shell commands that mutate the environment.',
+        ...(state.planFocus?.trim()
+          ? [`Current plan-mode focus: ${state.planFocus.trim()}`]
+          : []),
+      ],
+      disallowedTools: [
+        'write_file',
+        'replace_in_file',
+        'run_command',
+        'set_config',
+        'todo_write',
+        'create_task',
+        'create_cron_task',
+        'delete_cron_task',
+        'create_worktree',
+        'remove_worktree',
+        'edit_notebook_cell',
+        'add_notebook_cell',
+        'delete_notebook_cell',
+        'create_team',
+        'create_team_tasks',
+        'run_subagent',
+      ],
+    }
+  }
+
+  if (state.executionMode === 'worktree') {
+    return {
+      extraSystemAddenda: [
+        'You are currently operating inside RoyCode worktree mode.',
+        ...(state.activeWorktreePath
+          ? [`Active isolated worktree: ${state.activeWorktreePath}`]
+          : []),
+        ...(state.worktreeBaseRoot
+          ? [`Base repository root: ${state.worktreeBaseRoot}`]
+          : []),
+      ],
+      disallowedTools: [],
+    }
+  }
+
+  return {
+    extraSystemAddenda: [],
+    disallowedTools: [],
+  }
+}
+
+function normalizeToolList(value?: string[] | string): string[] | undefined {
+  if (!value) {
+    return undefined
+  }
+
+  const rawItems = Array.isArray(value) ? value : value.split(',')
+  const items = rawItems
+    .map(item => item.trim())
+    .filter(Boolean)
+
+  return items.length ? [...new Set(items)] : undefined
+}
+
+function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
+  const firstArg = rawArgs.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
+
+  switch (commandName) {
+    case 'workspace':
+    case 'access':
+    case 'permissions':
+    case 'safe-write':
+    case 'safewrite':
+    case 'cwd':
+    case 'run':
+    case 'teleport':
+    case 'apply':
+    case 'reject':
+      return true
+    case 'cron':
+      return ['add', 'remove', 'run-due'].includes(firstArg)
+    case 'plan-mode':
+    case 'planmode':
+      return firstArg === 'enter'
+    case 'worktree-mode':
+    case 'worktreemode':
+      return firstArg === 'enter'
+    case 'hook':
+      return ['add', 'set', 'clear', 'remove', 'enable', 'disable'].includes(firstArg)
+    case 'skill':
+      return ['use', 'drop', 'import'].includes(firstArg)
+    case 'plugin':
+      return ['import', 'enable', 'disable', 'remove'].includes(firstArg)
+    case 'memory':
+      return ['set', 'append', 'clear'].includes(firstArg)
+    case 'agent-memory':
+    case 'agentmemory':
+      return ['set', 'append'].includes(firstArg)
+    case 'config':
+      return firstArg === 'set'
+    case 'output-style':
+    case 'outputstyle':
+      return Boolean(firstArg)
+    case 'todos':
+    case 'todo':
+      return ['add', 'doing', 'done', 'remove', 'clear'].includes(firstArg)
+    case 'mcp':
+      return ['add-stdio', 'add-http', 'enable', 'disable', 'remove', 'call'].includes(firstArg)
+    case 'worktree':
+    case 'worktrees':
+      return ['add', 'remove', 'prune', 'switch'].includes(firstArg)
+    case 'notebook':
+      return ['set', 'add', 'delete'].includes(firstArg)
+    case 'team':
+      return ['create', 'task'].includes(firstArg)
+    case 'bridge':
+      return ['add', 'remove', 'enable', 'disable', 'run'].includes(firstArg)
+    case 'marketplace':
+      return ['add', 'remove', 'install'].includes(firstArg)
+    case 'lsp':
+      return firstArg === 'rename-apply'
+    case 'task':
+      return firstArg === 'start'
+    case 'git':
+      return ['stage', 'unstage', 'commit'].includes(firstArg)
+    default:
+      return false
+  }
+}
+
+function resolveStructuredQuestionAnswer(
+  rawAnswer: string,
+  question: StructuredQuestionPrompt,
+): string | null {
+  const trimmed = rawAnswer.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const tokens = question.multiSelect
+    ? trimmed
+        .split(',')
+        .map(item => item.trim())
+        .filter(Boolean)
+    : [trimmed]
+
+  const selectedLabels: string[] = []
+
+  for (const token of tokens) {
+    const numericIndex = Number.parseInt(token, 10)
+    if (
+      Number.isFinite(numericIndex) &&
+      String(numericIndex) === token &&
+      numericIndex >= 1 &&
+      numericIndex <= question.options.length
+    ) {
+      selectedLabels.push(question.options[numericIndex - 1]!.label)
+      continue
+    }
+
+    const normalized = token.toLowerCase()
+    const matchedOption =
+      question.options.find(option => option.label.toLowerCase() === normalized) ??
+      question.options.find(option => option.label.toLowerCase().startsWith(normalized)) ??
+      question.options.find(option => option.label.toLowerCase().includes(normalized))
+
+    if (matchedOption) {
+      selectedLabels.push(matchedOption.label)
+      continue
+    }
+
+    if (!question.multiSelect) {
+      return trimmed
+    }
+
+    return null
+  }
+
+  const uniqueLabels = [...new Set(selectedLabels)]
+  if (!uniqueLabels.length) {
+    return null
+  }
+  return question.multiSelect ? uniqueLabels.join(', ') : uniqueLabels[0]!
+}
+
+async function askStructuredQuestions(
+  request: StructuredQuestionRequest,
+): Promise<StructuredQuestionResponse> {
+  if (!activeReadline || !process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error('Structured questions require an interactive RoyCode terminal session')
+  }
+
+  printDivider()
+  info(
+    `Agent needs ${request.questions.length} clarification ${request.questions.length === 1 ? 'question' : 'questions'}`,
+  )
+
+  const answers: Record<string, string> = {}
+  for (const question of request.questions) {
+    process.stdout.write(`\n${label(question.header)} ${question.question}\n`)
+    question.options.forEach((option, index) => {
+      process.stdout.write(
+        `  ${dim(`${index + 1}.`)} ${option.label}${option.description ? dim(` - ${option.description}`) : ''}\n`,
+      )
+    })
+    process.stdout.write(
+      `${dim(
+        question.multiSelect
+          ? 'Enter one or more option numbers/labels separated by commas.'
+          : 'Enter an option number, label, or your own short answer.',
+      )}\n`,
+    )
+
+    while (true) {
+      const rawAnswer = await activeReadline.question(`${dim('answer')} `)
+      const resolved = resolveStructuredQuestionAnswer(rawAnswer, question)
+      if (!resolved) {
+        warn('Please choose a valid option or provide a short answer.')
+        continue
+      }
+      answers[question.question] = resolved
+      break
+    }
+  }
+
+  printDivider()
+  return { answers }
+}
+
 function printStatus(state: CliState): void {
   const provider = getSelectedProvider(state.settings)
   const model = resolveModel(state.settings, provider)
@@ -538,6 +810,7 @@ function printStatus(state: CliState): void {
       `${label('provider')} ${provider.name}`,
       `${label('model')} ${model || 'none'}`,
       `${label('cwd')} ${state.cwd}`,
+      `${label('mode')} ${describeExecutionMode(state)}`,
       `${label('skills')} ${state.activeSkills.length ? state.activeSkills.join(', ') : 'none'}`,
       `${label('summaries')} ${state.compactSummaries.length}`,
     ].join(` ${dim('|')} `) + '\n',
@@ -576,6 +849,10 @@ async function saveCurrentSession(state: CliState): Promise<void> {
     cwd: state.cwd,
     activeSkills: [...state.activeSkills],
     compactSummaries: [...state.compactSummaries],
+    executionMode: state.executionMode,
+    planFocus: state.planFocus,
+    worktreeBaseRoot: state.worktreeBaseRoot,
+    activeWorktreePath: state.activeWorktreePath,
     messages: cloneMessages(state.messages),
   }
 
@@ -708,11 +985,17 @@ function printHelp(): void {
       '/mcp call <server> <tool> [json] - call one MCP tool',
       '/mcp prompt <server> <prompt> [json] - resolve one MCP prompt',
       '/mcp resource <server> <uri> - read one MCP resource',
+      '/cron - list scheduled local prompts for this workspace',
+      '/cron add "<cron>" "<prompt>" [--once] - schedule a local prompt',
+      '/cron remove <id> - remove a scheduled prompt',
+      '/cron run-due - manually trigger due scheduled prompts now',
       '/worktree - list git worktrees',
       '/worktree show <ref> - inspect one git worktree',
       '/worktree switch <ref> - switch the session workspace to a git worktree',
       '/worktree add <path> [branch] [base] - create a git worktree',
       '/worktree remove <path> [--force] - remove a git worktree',
+      '/plan-mode [enter|exit|status] - toggle read-only planning mode',
+      '/worktree-mode [enter|exit|status] - bind this session to an isolated worktree and restore later',
       '/teleport worktree <name|path> - switch the session workspace to a git worktree',
       '/notebook cells <path> - list notebook cells',
       '/notebook read <path> <index|id> - read one notebook cell',
@@ -961,6 +1244,10 @@ async function loadSessionIntoState(
   state.sessionCreatedAt = record.createdAt
   state.explicitTitle = record.title !== 'New session' || record.messages.length > 0
   state.sessionTouched = record.messages.length > 0 || state.explicitTitle
+  state.executionMode = record.executionMode ?? 'default'
+  state.planFocus = record.planFocus
+  state.worktreeBaseRoot = record.worktreeBaseRoot
+  state.activeWorktreePath = record.activeWorktreePath
 
   return record
 }
@@ -975,6 +1262,10 @@ function startFreshSession(state: CliState): void {
   state.sessionCreatedAt = new Date().toISOString()
   state.explicitTitle = false
   state.sessionTouched = false
+  state.executionMode = 'default'
+  state.planFocus = undefined
+  state.worktreeBaseRoot = undefined
+  state.activeWorktreePath = undefined
 }
 
 function printProviders(state: CliState): void {
@@ -1410,6 +1701,28 @@ function printWorktreeDetails(worktree: {
   ])
 }
 
+function printCronTaskList(tasks: Array<{
+  id: string
+  cron: string
+  prompt: string
+  recurring?: boolean
+  nextRunAt?: string | null
+}>): void {
+  if (!tasks.length) {
+    info('No scheduled local prompts in this workspace')
+    return
+  }
+
+  for (const task of tasks) {
+    process.stdout.write(
+      `${dim('-')} ${task.id} ${dim(`(${cronToHuman(task.cron)})`)} ${task.recurring === false ? yellow('once') : green('repeat')}\n`,
+    )
+    process.stdout.write(
+      `    ${truncate(task.prompt, 120)}${task.nextRunAt ? dim(` | next ${task.nextRunAt}`) : ''}\n`,
+    )
+  }
+}
+
 function parseLineColumnArgs(tokens: string[]): { line: number; column: number } {
   const line = Number.parseInt(tokens[0] || '1', 10)
   const column = Number.parseInt(tokens[1] || '1', 10)
@@ -1659,6 +1972,7 @@ async function handleWorkspaceCommand(state: CliState, rawArgs: string): Promise
     ...settings,
     workspaceRoot: path.resolve(nextRoot),
   }))
+  await registerCronWorkspace(state.settings.workspaceRoot)
   state.cwd = '.'
   await saveCurrentSession(state)
   const instructionFiles = await listWorkspaceInstructionFiles(
@@ -2051,6 +2365,185 @@ async function handleGitCommand(state: CliState, rawArgs: string): Promise<void>
   }
 
   fail('Usage: /git [status|diff <path>|stage [path]|unstage <path>|commit <message>]')
+}
+
+async function handleCronCommand(state: CliState, rawArgs: string): Promise<void> {
+  await registerCronWorkspace(state.settings.workspaceRoot)
+  const { action, rest } = parseCommandTarget(rawArgs)
+
+  if (!action || action === 'list') {
+    const tasks = await listCronTasks(state.settings.workspaceRoot)
+    printCronTaskList(tasks)
+    return
+  }
+
+  if (action === 'add' || action === 'create') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const cron = tokens.shift()
+    if (!cron) {
+      fail('Usage: /cron add "<cron>" "<prompt>" [--once]')
+      return
+    }
+    const recurring = !tokens.includes('--once')
+    const prompt = tokens.filter(token => !token.startsWith('--')).join(' ').trim()
+    if (!prompt) {
+      fail('Usage: /cron add "<cron>" "<prompt>" [--once]')
+      return
+    }
+    const provider = getSelectedProvider(state.settings)
+    const task = await createCronTask({
+      cron,
+      prompt,
+      recurring,
+      workspaceRoot: state.settings.workspaceRoot,
+      accessMode: state.settings.accessMode,
+      safeWriteMode: state.settings.safeWriteMode,
+      providerId: provider.id,
+      model: resolveModel(state.settings, provider),
+      cwd: state.cwd,
+    })
+    await startCronScheduler([state.settings.workspaceRoot])
+    ok(
+      `Scheduled ${task.id} ${dim(`(${cronToHuman(task.cron)})`)} ${task.recurring === false ? 'once' : 'recurring'}`,
+    )
+    return
+  }
+
+  if (action === 'remove' || action === 'delete') {
+    const reference = stripWrappingQuotes(rest).trim()
+    if (!reference) {
+      fail('Usage: /cron remove <id>')
+      return
+    }
+    const deleted = await deleteCronTask(state.settings.workspaceRoot, reference)
+    if (!deleted) {
+      fail(`Scheduled task not found: ${reference}`)
+      return
+    }
+    ok(`Removed scheduled task ${deleted.id}`)
+    return
+  }
+
+  if (action === 'run-due' || action === 'tick') {
+    const summary = await runDueCronTasks([state.settings.workspaceRoot])
+    if (!summary.firedCount) {
+      info('No scheduled prompts are due right now')
+    } else {
+      ok(`Triggered ${summary.firedCount} scheduled prompt(s)`)
+    }
+    if (summary.errors.length) {
+      summary.errors.forEach(item => warn(item))
+    }
+    return
+  }
+
+  fail('Usage: /cron [list|add "<cron>" "<prompt>" [--once]|remove <id>|run-due]')
+}
+
+async function handlePlanModeCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+
+  if (!action || action === 'status') {
+    info(`Execution mode: ${describeExecutionMode(state)}`)
+    return
+  }
+
+  if (action === 'enter' || action === 'on') {
+    if (state.executionMode === 'worktree') {
+      warn('Exit worktree mode first if you want a pure plan session.')
+      return
+    }
+    state.executionMode = 'plan'
+    state.planFocus = rest.trim() || undefined
+    state.sessionTouched = true
+    await saveCurrentSession(state)
+    ok(
+      state.planFocus
+        ? `Entered plan mode with focus: ${state.planFocus}`
+        : 'Entered plan mode',
+    )
+    return
+  }
+
+  if (action === 'exit' || action === 'off') {
+    if (state.executionMode !== 'plan') {
+      info('Plan mode is not active')
+      return
+    }
+    state.executionMode = 'default'
+    state.planFocus = undefined
+    state.sessionTouched = true
+    await saveCurrentSession(state)
+    ok('Exited plan mode')
+    return
+  }
+
+  fail('Usage: /plan-mode [enter [focus]|exit|status]')
+}
+
+async function handleWorktreeModeCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+
+  if (!action || action === 'status') {
+    if (state.executionMode !== 'worktree') {
+      info('Worktree mode is not active')
+      return
+    }
+    info(`Active worktree: ${state.activeWorktreePath || state.settings.workspaceRoot}`)
+    if (state.worktreeBaseRoot) {
+      info(`Base workspace: ${state.worktreeBaseRoot}`)
+    }
+    return
+  }
+
+  if (action === 'enter' || action === 'switch') {
+    if (state.executionMode === 'plan') {
+      warn('Exit plan mode before entering worktree mode.')
+      return
+    }
+    const reference = stripWrappingQuotes(rest).trim()
+    if (!reference) {
+      fail('Usage: /worktree-mode enter <name|path>')
+      return
+    }
+    const baseRoot =
+      state.executionMode === 'worktree'
+        ? state.worktreeBaseRoot || state.settings.workspaceRoot
+        : state.settings.workspaceRoot
+    const worktree = await findGitWorktree(baseRoot, reference)
+    if (!worktree) {
+      fail(`Worktree not found: ${reference}`)
+      return
+    }
+    state.executionMode = 'worktree'
+    state.worktreeBaseRoot = baseRoot
+    state.activeWorktreePath = worktree.path
+    await handleWorkspaceCommand(state, worktree.path)
+    state.sessionTouched = true
+    await saveCurrentSession(state)
+    ok(`Entered worktree mode in ${worktree.path}`)
+    return
+  }
+
+  if (action === 'exit' || action === 'off') {
+    if (state.executionMode !== 'worktree') {
+      info('Worktree mode is not active')
+      return
+    }
+    const restoreRoot = state.worktreeBaseRoot || state.settings.workspaceRoot
+    state.executionMode = 'default'
+    state.activeWorktreePath = undefined
+    state.worktreeBaseRoot = undefined
+    state.sessionTouched = true
+    if (path.resolve(state.settings.workspaceRoot) !== path.resolve(restoreRoot)) {
+      await handleWorkspaceCommand(state, restoreRoot)
+    }
+    await saveCurrentSession(state)
+    ok(`Exited worktree mode${restoreRoot ? ` and restored ${restoreRoot}` : ''}`)
+    return
+  }
+
+  fail('Usage: /worktree-mode [enter <ref>|exit|status]')
 }
 
 async function handleWorktreeCommand(state: CliState, rawArgs: string): Promise<void> {
@@ -4478,7 +4971,14 @@ async function runPromptInternal(
     accessMode: state.settings.accessMode,
     sessionId: state.sessionId,
   })
+  const modeAddenda = buildModeSystemAddenda(state)
+  const effectiveAllowedTools = normalizeToolList(options.allowedTools)
+  const effectiveDisallowedTools = normalizeToolList([
+    ...modeAddenda.disallowedTools,
+    ...(options.disallowedTools ?? []),
+  ])
   const systemAddenda = [
+    ...modeAddenda.extraSystemAddenda,
     ...(compactSystemMessage ? [compactSystemMessage] : []),
     ...(skillSystemMessage ? [skillSystemMessage] : []),
     ...hookSystemAddenda,
@@ -4521,12 +5021,13 @@ async function runPromptInternal(
         sessionId: state.sessionId,
         cwd: state.cwd,
         systemAddenda: systemAddenda.length ? systemAddenda : undefined,
-        allowedTools: options.allowedTools,
-        disallowedTools: options.disallowedTools,
+        allowedTools: effectiveAllowedTools,
+        disallowedTools: effectiveDisallowedTools,
         maxAgentSteps: options.maxAgentSteps,
         messages: effectiveMessages,
       },
       {
+        askQuestions: askStructuredQuestions,
         async onEvent(event) {
           switch (event.type) {
             case 'status':
@@ -4657,6 +5158,13 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     return true
   }
 
+  if (state.executionMode === 'plan' && isPlanModeWriteCommand(command.name, command.rawArgs)) {
+    warn(
+      `/${command.name} is blocked in plan mode. Use /plan-mode exit before making changes or running mutating commands.`,
+    )
+    return true
+  }
+
   switch (command.name) {
     case 'help':
       printHelp()
@@ -4778,9 +5286,20 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'mcp':
       await handleMcpCommand(state, command.rawArgs)
       return true
+    case 'cron':
+      await handleCronCommand(state, command.rawArgs)
+      return true
     case 'worktree':
     case 'worktrees':
       await handleWorktreeCommand(state, command.rawArgs)
+      return true
+    case 'plan-mode':
+    case 'planmode':
+      await handlePlanModeCommand(state, command.rawArgs)
+      return true
+    case 'worktree-mode':
+    case 'worktreemode':
+      await handleWorktreeModeCommand(state, command.rawArgs)
       return true
     case 'teleport':
       await handleTeleportCommand(state, command.rawArgs)
@@ -5090,94 +5609,103 @@ async function main(): Promise<void> {
   )
 
   await applyStartupOptions(state, options, launchDirectory)
-
-  if (options.listSessions) {
-    const sessions = await listCliSessions()
-    printSessions(sessions, state.sessionId)
-    if (shouldExitAfterListing(options)) {
-      return
-    }
-  }
-
-  const interactive = Boolean(
-    process.stdin.isTTY &&
-      process.stdout.isTTY &&
-      !options.prompt &&
-      !options.webSearchQuery &&
-      !options.webFetchUrl,
-  )
-  const shouldPrintBanner = interactive || Boolean(options.prompt && !options.printMode)
-
-  if (shouldPrintBanner) {
-    printBanner(state)
-  }
-
-  if (options.prompt) {
-    const answer = await runPromptInternal(state, options.prompt, {
-      quiet: options.printMode,
-      extraSystemAddenda: options.appendSystemPrompts,
-    })
-    if (options.printMode && answer != null) {
-      if ((options.outputFormat || 'text').toLowerCase() === 'json') {
-        process.stdout.write(`${JSON.stringify({ answer }, null, 2)}\n`)
-      } else {
-        process.stdout.write(`${answer}\n`)
-      }
-    }
-    return
-  }
-
-  if (options.webSearchQuery) {
-    await handleWebSearchCommand(options.webSearchQuery)
-    return
-  }
-
-  if (options.webFetchUrl) {
-    await handleWebFetchCommand(options.webFetchUrl)
-    return
-  }
-
-  const readline = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: interactive,
-    historySize: 500,
-  })
-
-  process.on('SIGINT', () => {
-    process.stdout.write(`\n${dim('Use /exit to quit RoyCode CLI.')}\n`)
-  })
+  await registerCronWorkspace(state.settings.workspaceRoot)
+  await startCronScheduler([state.settings.workspaceRoot])
 
   try {
-    let running = true
-
-    if (interactive) {
-      while (running) {
-        const rawInput = await readline.question(buildPromptLabel(state))
-        const trimmed = rawInput.trim()
-
-        if (trimmed === '/multiline' || trimmed === '/paste') {
-          const multilineInput = await captureMultilineInput(readline)
-          if (multilineInput && multilineInput.trim()) {
-            running = await processInputLine(state, multilineInput)
-          }
-          continue
-        }
-
-        running = await processInputLine(state, rawInput)
-      }
-    } else {
-      for await (const rawInput of readline) {
-        running = await processInputLine(state, rawInput)
-        if (!running) {
-          break
-        }
+    if (options.listSessions) {
+      const sessions = await listCliSessions()
+      printSessions(sessions, state.sessionId)
+      if (shouldExitAfterListing(options)) {
+        return
       }
     }
+
+    const interactive = Boolean(
+      process.stdin.isTTY &&
+        process.stdout.isTTY &&
+        !options.prompt &&
+        !options.webSearchQuery &&
+        !options.webFetchUrl,
+    )
+    const shouldPrintBanner = interactive || Boolean(options.prompt && !options.printMode)
+
+    if (shouldPrintBanner) {
+      printBanner(state)
+    }
+
+    if (options.prompt) {
+      const answer = await runPromptInternal(state, options.prompt, {
+        quiet: options.printMode,
+        extraSystemAddenda: options.appendSystemPrompts,
+        allowedTools: normalizeToolList(options.allowedTools),
+      })
+      if (options.printMode && answer != null) {
+        if ((options.outputFormat || 'text').toLowerCase() === 'json') {
+          process.stdout.write(`${JSON.stringify({ answer }, null, 2)}\n`)
+        } else {
+          process.stdout.write(`${answer}\n`)
+        }
+      }
+      return
+    }
+
+    if (options.webSearchQuery) {
+      await handleWebSearchCommand(options.webSearchQuery)
+      return
+    }
+
+    if (options.webFetchUrl) {
+      await handleWebFetchCommand(options.webFetchUrl)
+      return
+    }
+
+    const readline = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: interactive,
+      historySize: 500,
+    })
+    activeReadline = readline
+
+    process.on('SIGINT', () => {
+      process.stdout.write(`\n${dim('Use /exit to quit RoyCode CLI.')}\n`)
+    })
+
+    try {
+      let running = true
+
+      if (interactive) {
+        while (running) {
+          const rawInput = await readline.question(buildPromptLabel(state))
+          const trimmed = rawInput.trim()
+
+          if (trimmed === '/multiline' || trimmed === '/paste') {
+            const multilineInput = await captureMultilineInput(readline)
+            if (multilineInput && multilineInput.trim()) {
+              running = await processInputLine(state, multilineInput)
+            }
+            continue
+          }
+
+          running = await processInputLine(state, rawInput)
+        }
+      } else {
+        for await (const rawInput of readline) {
+          running = await processInputLine(state, rawInput)
+          if (!running) {
+            break
+          }
+        }
+      }
+    } finally {
+      activeReadline = null
+      await runHookSafely('stop', state)
+      await saveCurrentSession(state)
+      readline.close()
+    }
   } finally {
-    await runHookSafely('stop', state)
-    await saveCurrentSession(state)
-    readline.close()
+    await stopCronScheduler().catch(() => undefined)
   }
 }
 

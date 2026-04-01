@@ -13,10 +13,13 @@ data/task-logs/
 data/workspace-memory/
 data/pending-changes.json
 data/mcp-servers.json
+data/cron-workspaces.json
+data/cron-leader.json
 data/plugins.json
 data/bridges.json
 data/marketplace.json
 data/teams.json
+**/.claude/scheduled_tasks.json
 tmp-smoke*
 tmp-market-*
 .tmp-compat-workspace

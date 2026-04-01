@@ -31,6 +31,7 @@ type StatusSnapshot = {
   provider?: string
   model?: string
   cwd?: string
+  mode?: string
   skills?: string
   summaries?: string
 }
@@ -122,6 +123,7 @@ function parseStatusSnapshot(line: string): Partial<StatusSnapshot> | null {
     ['provider', 'provider '],
     ['model', 'model '],
     ['cwd', 'cwd '],
+    ['mode', 'mode '],
     ['skills', 'skills '],
     ['summaries', 'summaries '],
   ]
@@ -146,7 +148,7 @@ function RoyCodeTui(): React.ReactElement {
     {
       id: 'boot',
       channel: 'system',
-      text: 'RoyCode TUI ready. Type /help for commands. Ctrl+L clears the view, Ctrl+R sends /status, Ctrl+W sends /context.',
+      text: 'RoyCode TUI ready. Type /help for commands. Ctrl+L clears the view, Ctrl+R sends /status, Ctrl+W sends /context, Ctrl+Y sends /cron, Ctrl+K sends /worktree, Ctrl+O sends /plan-mode status.',
     },
   ])
   const [status, setStatus] = useState('Launching RoyCode CLI...')
@@ -293,6 +295,22 @@ function RoyCodeTui(): React.ReactElement {
     if (key.ctrl && value === 'p') {
       setLastShortcut('Ctrl+P')
       childRef.current?.stdin.write('/pending\n')
+      return
+    }
+    if (key.ctrl && value === 'y') {
+      setLastShortcut('Ctrl+Y')
+      childRef.current?.stdin.write('/cron\n')
+      return
+    }
+    if (key.ctrl && value === 'k') {
+      setLastShortcut('Ctrl+K')
+      childRef.current?.stdin.write('/worktree\n')
+      return
+    }
+    if (key.ctrl && value === 'o') {
+      setLastShortcut('Ctrl+O')
+      childRef.current?.stdin.write('/plan-mode status\n')
+      return
     }
   })
 
@@ -348,7 +366,7 @@ function RoyCodeTui(): React.ReactElement {
           status: {status}
         </Text>
         <Text color="gray">
-          mode: interactive tui
+          mode: {snapshot.mode ?? 'interactive tui'}
         </Text>
       </Box>
 
@@ -365,6 +383,7 @@ function RoyCodeTui(): React.ReactElement {
             <Text color="gray">model: {snapshot.model ?? 'unknown'}</Text>
             <Text color="gray">access: {snapshot.access ?? 'unknown'}</Text>
             <Text color="gray">safe-write: {snapshot.safeWrite ?? 'unknown'}</Text>
+            <Text color="gray">mode: {snapshot.mode ?? 'unknown'}</Text>
             <Text color="gray">skills: {snapshot.skills ?? 'unknown'}</Text>
           </Box>
 
@@ -383,6 +402,9 @@ function RoyCodeTui(): React.ReactElement {
             <Text color="gray">Ctrl+W: /context</Text>
             <Text color="gray">Ctrl+G: /git</Text>
             <Text color="gray">Ctrl+P: /pending</Text>
+            <Text color="gray">Ctrl+Y: /cron</Text>
+            <Text color="gray">Ctrl+K: /worktree</Text>
+            <Text color="gray">Ctrl+O: /plan-mode status</Text>
             <Text color="gray">Ctrl+L: clear view</Text>
             <Text color="gray">Ctrl+C: exit</Text>
             <Text color="gray">last: {lastShortcut}</Text>

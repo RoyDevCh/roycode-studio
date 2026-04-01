@@ -9,6 +9,7 @@ import {
   serializeAgentStreamEvent,
   streamAgentChat,
 } from './agent.js'
+import { registerCronWorkspace, startCronScheduler, stopCronScheduler } from './cron.js'
 import { buildFileTree, runWorkspaceCommand } from './filesystem.js'
 import {
   commitGitChanges,
@@ -187,6 +188,8 @@ app.put('/api/settings', async (req, res, next) => {
       ...payload,
     }
     await writeSettings(nextSettings)
+    await registerCronWorkspace(nextSettings.workspaceRoot)
+    await startCronScheduler([nextSettings.workspaceRoot])
     res.json({ settings: toPublicSettings(nextSettings) })
   } catch (error) {
     next(error)
@@ -582,6 +585,18 @@ app.use(
 )
 
 await serveClientIfPresent()
+
+const startupSettings = await readSettings()
+await registerCronWorkspace(startupSettings.workspaceRoot)
+await startCronScheduler([startupSettings.workspaceRoot])
+
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+  process.on(signal, () => {
+    void stopCronScheduler().finally(() => {
+      process.exit(0)
+    })
+  })
+}
 
 app.listen(PORT, () => {
   console.log(`RoyCode Studio is running on http://localhost:${PORT}`)
