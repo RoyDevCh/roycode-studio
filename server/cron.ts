@@ -4,7 +4,7 @@ import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
-import { createTask, launchTaskRunner } from './tasks.js'
+import { createTask, launchTaskRunner, recordTaskRunnerPid } from './tasks.js'
 import type { AccessMode } from './types.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -560,7 +560,7 @@ async function fireCronTask(task: CronTaskRecord): Promise<string> {
     cwd: task.cwd || '.',
     baseMessages: [],
   })
-  launchTaskRunner(created.id)
+  await recordTaskRunnerPid(created.id, launchTaskRunner(created.id))
   return created.id
 }
 

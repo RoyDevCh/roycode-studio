@@ -28,6 +28,8 @@ function getDefaultSettings(): AppSettings {
     appName: 'RoyCode Studio',
     workspaceRoot: DEFAULT_WORKSPACE_ROOT,
     accessMode: 'workspace',
+    theme: 'dark',
+    vimMode: false,
     outputStyle: 'default',
     cleanupPeriodDays: 30,
     defaultShell: 'powershell',
@@ -57,6 +59,11 @@ function normalizeSettings(raw: Partial<AppSettings>): AppSettings {
     ...raw,
     providers: raw.providers ?? defaults.providers,
     accessMode: raw.accessMode ?? defaults.accessMode,
+    theme:
+      raw.theme === 'light' || raw.theme === 'dark' || raw.theme === 'auto'
+        ? raw.theme
+        : defaults.theme,
+    vimMode: typeof raw.vimMode === 'boolean' ? raw.vimMode : defaults.vimMode,
     safeWriteMode: raw.safeWriteMode ?? defaults.safeWriteMode,
     outputStyle: raw.outputStyle ?? defaults.outputStyle,
     cleanupPeriodDays:

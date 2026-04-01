@@ -41,6 +41,8 @@ export type AppSettings = {
   appName: string
   workspaceRoot: string
   accessMode: AccessMode
+  theme?: 'dark' | 'light' | 'auto'
+  vimMode?: boolean
   outputStyle?: string
   cleanupPeriodDays?: number
   defaultShell?: 'powershell' | 'bash'

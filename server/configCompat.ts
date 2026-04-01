@@ -96,6 +96,29 @@ const CONFIG_HANDLERS: ConfigHandler[] = [
     },
   },
   {
+    key: 'theme',
+    description: 'Preferred RoyCode terminal theme: dark, light, or auto.',
+    type: 'enum',
+    options: ['dark', 'light', 'auto'],
+    aliases: ['ui.theme'],
+    get: settings => settings.theme ?? 'dark',
+    set: (settings, value) => {
+      const normalized = String(value).trim().toLowerCase()
+      if (!['dark', 'light', 'auto'].includes(normalized)) {
+        throw new Error('theme must be dark, light, or auto')
+      }
+      return { ...settings, theme: normalized as AppSettings['theme'] }
+    },
+  },
+  {
+    key: 'vimMode',
+    description: 'Whether RoyCode should prefer Vim-style editing mode where supported.',
+    type: 'boolean',
+    aliases: ['vim', 'ui.vim'],
+    get: settings => settings.vimMode ?? false,
+    set: (settings, value) => ({ ...settings, vimMode: parseBooleanLike(value) }),
+  },
+  {
     key: 'permissions.defaultMode',
     description: 'Claude-style permission preset: workspace, safe, or full.',
     type: 'enum',

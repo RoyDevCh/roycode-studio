@@ -19,16 +19,21 @@ function readTaskId(argv: string[]): string {
 
 async function main(): Promise<void> {
   const taskId = readTaskId(process.argv.slice(2))
-  const task = await getTask(taskId)
-  if (!task) {
+  const initialTask = await getTask(taskId)
+  if (!initialTask) {
     throw new Error(`Task not found: ${taskId}`)
   }
+  if (initialTask.stopRequestedAt || initialTask.status === 'cancelled') {
+    await appendTaskLog(taskId, `[${new Date().toISOString()}] skipped because task was already cancelled`)
+    return
+  }
 
-  await updateTask(task.id, current => ({
+  const task = await updateTask(taskId, current => ({
     ...current,
     status: 'running',
     startedAt: new Date().toISOString(),
     error: undefined,
+    runnerPid: process.pid,
   }))
   await appendTaskLog(task.id, `[${new Date().toISOString()}] running ${task.title}`)
 
@@ -117,6 +122,11 @@ async function main(): Promise<void> {
     })
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown task runner error'
+    const latest = await getTask(task.id)
+    if (latest?.status === 'cancelled' || latest?.stopRequestedAt) {
+      await appendTaskLog(task.id, `[${new Date().toISOString()}] cancelled`)
+      return
+    }
     await appendTaskLog(task.id, `[${new Date().toISOString()}] failed ${message}`)
     await updateTask(task.id, current => ({
       ...current,

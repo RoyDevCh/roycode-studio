@@ -120,6 +120,10 @@ import {
   launchTaskRunner,
   listTasks,
   readTaskLog,
+  recordTaskRunnerPid,
+  restartTask,
+  stopTask,
+  updateTaskMetadata,
 } from './tasks.js'
 import {
   appendWorkspaceMemory,
@@ -243,6 +247,18 @@ type CliState = {
   activeWorktreePath?: string
 }
 
+type ThinkbackSummary = {
+  totalSessions: number
+  activeSessionsLast30Days: number
+  totalMessages: number
+  totalCompactions: number
+  topWorkspaces: Array<{ workspaceRoot: string; count: number }>
+  topModels: Array<{ model: string; count: number }>
+  topProviders: Array<{ providerId: string; count: number }>
+  topModes: Array<{ mode: string; count: number }>
+  recentTitles: string[]
+}
+
 const MAX_ATTACHMENT_CHARS = 12_000
 const MAX_FILE_PREVIEW_LINES = 220
 const MAX_FILE_PREVIEW_CHARS = 18_000
@@ -362,6 +378,37 @@ function createFreshState(settings: AppSettings): CliState {
     sessionTouched: false,
     executionMode: 'default',
   }
+}
+
+function makeUniqueSessionTitle(
+  desiredTitle: string,
+  existingTitles: Set<string>,
+): string {
+  const baseTitle = truncate(desiredTitle.trim() || 'New session', MAX_MESSAGE_TITLE_LENGTH)
+  let candidate = baseTitle
+  let counter = 2
+  while (existingTitles.has(candidate.toLowerCase())) {
+    const suffix = ` (${counter})`
+    candidate = truncate(
+      baseTitle.slice(0, Math.max(1, MAX_MESSAGE_TITLE_LENGTH - suffix.length)) + suffix,
+      MAX_MESSAGE_TITLE_LENGTH,
+    )
+    counter += 1
+  }
+  return candidate
+}
+
+function buildBranchTitleBase(currentTitle: string, requestedTitle: string): string {
+  const trimmedRequested = requestedTitle.trim()
+  if (trimmedRequested) {
+    return trimmedRequested
+  }
+
+  const normalizedCurrent = currentTitle.trim() || 'New session'
+  if (/branch/i.test(normalizedCurrent)) {
+    return normalizedCurrent
+  }
+  return `${normalizedCurrent} (Branch)`
 }
 
 function shouldPersistSession(state: CliState): boolean {
@@ -634,6 +681,15 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
   const firstArg = rawArgs.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
 
   switch (commandName) {
+    case 'branch':
+    case 'rename':
+    case 'title':
+    case 'new':
+    case 'delete-session':
+    case 'compact':
+    case 'rewind':
+    case 'theme':
+    case 'vim':
     case 'workspace':
     case 'access':
     case 'permissions':
@@ -688,7 +744,7 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
     case 'lsp':
       return firstArg === 'rename-apply'
     case 'task':
-      return firstArg === 'start'
+      return ['start', 'stop', 'retry', 'update'].includes(firstArg)
     case 'git':
       return ['stage', 'unstage', 'commit'].includes(firstArg)
     default:
@@ -805,6 +861,8 @@ function printStatus(state: CliState): void {
       `${label('attachments')} ${state.pendingAttachments.length}`,
       `${label('workspace')} ${state.settings.workspaceRoot}`,
       `${label('access')} ${state.settings.accessMode}`,
+      `${label('theme')} ${state.settings.theme || 'dark'}`,
+      `${label('vim')} ${(state.settings.vimMode ?? false) ? green('on') : red('off')}`,
       `${label('safe-write')} ${state.settings.safeWriteMode ? green('on') : red('off')}`,
       `${label('style')} ${state.settings.outputStyle || DEFAULT_OUTPUT_STYLE_NAME}`,
       `${label('provider')} ${provider.name}`,
@@ -914,6 +972,8 @@ function printHelp(): void {
       '/provider <id|name> - switch provider',
       '/models - list models for the current provider',
       '/model <name> - switch model under the current provider',
+      '/theme <dark|light|auto> - switch the preferred RoyCode theme',
+      '/vim <on|off|toggle> - toggle vim-style input mode preference',
       '/workspace <path> - change workspace root',
       '/access <workspace|unrestricted> - change filesystem mode',
       '/permissions <full|safe|workspace> - switch permission preset',
@@ -1025,6 +1085,10 @@ function printHelp(): void {
       '/task start <prompt> - launch a background agent task',
       '/task show <id> - inspect one task',
       '/task logs <id> - print task logs',
+      '/task output <id> - print the final task result if available',
+      '/task stop <id> - request cancellation for one task',
+      '/task retry <id> - restart one task from scratch',
+      '/task update <id> <prompt> - update one task title and prompt',
       '/pending - list pending changes',
       '/apply <path|all> - apply pending changes',
       '/reject <path|all> - reject pending changes',
@@ -1035,7 +1099,12 @@ function printHelp(): void {
       '/git commit <message> - create a commit',
       '/sessions - list saved CLI sessions',
       '/resume <id|latest> - resume a saved session',
+      '/branch [title] - fork the current conversation into a new session',
+      '/summary [instructions] - summarize the current conversation',
+      '/thinkback - inspect saved session history and usage patterns',
+      '/insights - alias for /thinkback',
       '/title <text> - rename the current session',
+      '/rename <text> - alias for /title',
       '/delete-session <id|latest|current> - delete a saved session',
       '/new - start a fresh conversation in the current workspace',
       '/compact [instructions] - replace the current transcript with a compact summary',
@@ -1453,13 +1522,17 @@ function printTaskList(
 function printTaskDetails(task: {
   id: string
   title: string
+  prompt: string
   status: string
   createdAt: string
   updatedAt: string
+  startedAt?: string
+  finishedAt?: string
   workspaceRoot: string
   cwd: string
   providerId: string
   model: string
+  runnerPid?: number
   result?: string
   error?: string
 }): void {
@@ -1474,10 +1547,16 @@ function printTaskDetails(task: {
       `${label('model')} ${task.model}`,
       `${label('created')} ${task.createdAt}`,
       `${label('updated')} ${task.updatedAt}`,
+      `${label('started')} ${task.startedAt || '(not started)'}`,
+      `${label('finished')} ${task.finishedAt || '(not finished)'}`,
+      `${label('runner')} ${
+        typeof task.runnerPid === 'number' ? String(task.runnerPid) : '(none)'
+      }`,
     ].join(` ${dim('|')} `) + '\n',
   )
+  process.stdout.write(`\n${label('prompt')}\n${task.prompt}\n`)
   if (task.error) {
-    process.stdout.write(`${red('error')} ${task.error}\n`)
+    process.stdout.write(`\n${red('error')} ${task.error}\n`)
   }
   if (task.result) {
     process.stdout.write(`\n${task.result}\n`)
@@ -2939,7 +3018,7 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
         cwd: state.cwd,
         baseMessages: [],
       })
-      launchTaskRunner(task.id)
+      await recordTaskRunnerPid(task.id, launchTaskRunner(task.id))
       createdTasks.push({ member: member.name, id: task.id, logPath: task.logPath })
     }
     process.stdout.write(`${JSON.stringify({ team: team.name, tasks: createdTasks }, null, 2)}\n`)
@@ -3405,6 +3484,307 @@ async function buildConversationCompactSummary(
   )
 
   return response.answer.trim() || null
+}
+
+async function buildConversationSummary(
+  state: CliState,
+  instructions: string,
+): Promise<string | null> {
+  if (!state.messages.length && !state.compactSummaries.length) {
+    return null
+  }
+
+  const provider = getSelectedProvider(state.settings)
+  const model = resolveModel(state.settings, provider)
+  const skillSystemMessage = await buildActiveSkillSystemMessage(state.activeSkills, {
+    workspaceRoot: state.settings.workspaceRoot,
+    cwd: state.cwd,
+    accessMode: state.settings.accessMode,
+    sessionId: state.sessionId,
+  })
+  const compactSystemMessage = buildCompactSystemMessage(state)
+  const summaryPrompt = [
+    'Summarize the current RoyCode session for a developer who needs the current state quickly.',
+    'Structure the answer with these sections when relevant:',
+    '- Goal',
+    '- Important Findings',
+    '- Files and Commands',
+    '- Open Work',
+    '- Risks or Verification Gaps',
+    'Keep it concise, high-signal, and focused on what still matters now.',
+    instructions ? `Extra instructions:\n${instructions}` : '',
+    'Return plain markdown only.',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  const response = await streamAgentChat(
+    provider,
+    state.settings,
+    {
+      providerId: provider.id,
+      model,
+      cwd: state.cwd,
+      maxAgentSteps: 1,
+      systemAddenda: [
+        'You are summarizing a coding-agent session. Do not call tools.',
+        ...(compactSystemMessage ? [compactSystemMessage] : []),
+        ...(skillSystemMessage ? [skillSystemMessage] : []),
+      ],
+      messages: [
+        ...cloneMessages(state.messages),
+        {
+          role: 'user',
+          content: summaryPrompt,
+        },
+      ],
+    },
+    {
+      async onEvent(event) {
+        if (event.type === 'status') {
+          process.stdout.write(`${dim(`[summary] ${event.message}`)}\n`)
+        }
+      },
+    },
+  )
+
+  return response.answer.trim() || null
+}
+
+function rankCounts(
+  counts: Map<string, number>,
+  limit = 5,
+): Array<{ value: string; count: number }> {
+  return [...counts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+    .slice(0, limit)
+    .map(([value, count]) => ({ value, count }))
+}
+
+async function buildThinkbackSummary(state: CliState): Promise<ThinkbackSummary> {
+  await saveCurrentSession(state)
+  const sessions = await listCliSessions()
+  const cutoffMs = Date.now() - 30 * 24 * 60 * 60 * 1000
+  const workspaceCounts = new Map<string, number>()
+  const modelCounts = new Map<string, number>()
+  const providerCounts = new Map<string, number>()
+  const modeCounts = new Map<string, number>()
+
+  let activeSessionsLast30Days = 0
+  let totalMessages = 0
+  let totalCompactions = 0
+
+  for (const session of sessions) {
+    const updatedMs = Date.parse(session.updatedAt)
+    if (Number.isFinite(updatedMs) && updatedMs >= cutoffMs) {
+      activeSessionsLast30Days += 1
+    }
+    totalMessages += session.messages.length
+    totalCompactions += session.compactSummaries?.length ?? 0
+    workspaceCounts.set(
+      session.workspaceRoot,
+      (workspaceCounts.get(session.workspaceRoot) ?? 0) + 1,
+    )
+    if (session.model) {
+      modelCounts.set(session.model, (modelCounts.get(session.model) ?? 0) + 1)
+    }
+    if (session.providerId) {
+      providerCounts.set(
+        session.providerId,
+        (providerCounts.get(session.providerId) ?? 0) + 1,
+      )
+    }
+    modeCounts.set(
+      session.executionMode ?? 'default',
+      (modeCounts.get(session.executionMode ?? 'default') ?? 0) + 1,
+    )
+  }
+
+  return {
+    totalSessions: sessions.length,
+    activeSessionsLast30Days,
+    totalMessages,
+    totalCompactions,
+    topWorkspaces: rankCounts(workspaceCounts).map(item => ({
+      workspaceRoot: item.value,
+      count: item.count,
+    })),
+    topModels: rankCounts(modelCounts).map(item => ({
+      model: item.value,
+      count: item.count,
+    })),
+    topProviders: rankCounts(providerCounts).map(item => ({
+      providerId: item.value,
+      count: item.count,
+    })),
+    topModes: rankCounts(modeCounts).map(item => ({
+      mode: item.value,
+      count: item.count,
+    })),
+    recentTitles: sessions
+      .map(session => session.title.trim())
+      .filter(Boolean)
+      .slice(0, 8),
+  }
+}
+
+function printThinkbackSummary(summary: ThinkbackSummary): void {
+  printDivider()
+  process.stdout.write(`${label('RoyCode Thinkback')}\n`)
+  process.stdout.write(
+    [
+      `${label('sessions')} ${summary.totalSessions}`,
+      `${label('last-30d')} ${summary.activeSessionsLast30Days}`,
+      `${label('messages')} ${summary.totalMessages}`,
+      `${label('compactions')} ${summary.totalCompactions}`,
+    ].join(` ${dim('|')} `) + '\n\n',
+  )
+
+  printKeyValueBlock(
+    'Top Workspaces',
+    summary.topWorkspaces.length
+      ? summary.topWorkspaces.map(item => ({
+          label: item.workspaceRoot,
+          value: String(item.count),
+        }))
+      : [{ label: '(none)', value: '0' }],
+  )
+  process.stdout.write('\n')
+
+  printKeyValueBlock(
+    'Top Providers',
+    summary.topProviders.length
+      ? summary.topProviders.map(item => ({
+          label: item.providerId,
+          value: String(item.count),
+        }))
+      : [{ label: '(none)', value: '0' }],
+  )
+  process.stdout.write('\n')
+
+  printKeyValueBlock(
+    'Top Models',
+    summary.topModels.length
+      ? summary.topModels.map(item => ({
+          label: item.model,
+          value: String(item.count),
+        }))
+      : [{ label: '(none)', value: '0' }],
+  )
+  process.stdout.write('\n')
+
+  printKeyValueBlock(
+    'Execution Modes',
+    summary.topModes.length
+      ? summary.topModes.map(item => ({
+          label: item.mode,
+          value: String(item.count),
+        }))
+      : [{ label: '(none)', value: '0' }],
+  )
+  process.stdout.write('\n')
+
+  printKeyValueBlock(
+    'Recent Session Titles',
+    summary.recentTitles.length
+      ? summary.recentTitles.map(title => ({
+          label: title,
+          value: '',
+        }))
+      : [{ label: '(none)', value: '' }],
+  )
+  printDivider()
+}
+
+async function handleBranchCommand(state: CliState, rawArgs: string): Promise<void> {
+  await saveCurrentSession(state)
+  const sessions = await listCliSessions()
+  const existingTitles = new Set(sessions.map(session => session.title.toLowerCase()))
+  const nextTitle = makeUniqueSessionTitle(
+    buildBranchTitleBase(state.sessionTitle, stripWrappingQuotes(rawArgs)),
+    existingTitles,
+  )
+
+  state.sessionId = createSessionId()
+  state.sessionTitle = nextTitle
+  state.sessionCreatedAt = new Date().toISOString()
+  state.pendingAttachments = []
+  state.explicitTitle = true
+  state.sessionTouched = true
+
+  await saveCurrentSession(state)
+  ok(`Created branched session ${state.sessionId} (${state.sessionTitle})`)
+}
+
+async function handleSummaryCommand(state: CliState, rawArgs: string): Promise<void> {
+  const summary = await buildConversationSummary(state, rawArgs.trim())
+  if (!summary) {
+    info('Nothing to summarize in the current session')
+    return
+  }
+
+  printDivider()
+  process.stdout.write(`${label('Session Summary')}\n\n${summary}\n`)
+  printDivider()
+}
+
+async function handleThinkbackCommand(state: CliState): Promise<void> {
+  const summary = await buildThinkbackSummary(state)
+  printThinkbackSummary(summary)
+}
+
+async function handleThemeCommand(state: CliState, rawArgs: string): Promise<void> {
+  const nextTheme = rawArgs.trim().toLowerCase()
+  if (!nextTheme) {
+    info(`Current theme: ${state.settings.theme || 'dark'}`)
+    info('Usage: /theme <dark|light|auto>')
+    return
+  }
+  if (!['dark', 'light', 'auto'].includes(nextTheme)) {
+    fail('Usage: /theme <dark|light|auto>')
+    return
+  }
+
+  await updateSettings(state, settings => ({
+    ...settings,
+    theme: nextTheme as AppSettings['theme'],
+  }))
+  await runHookSafely('config-changed', state, {
+    configKey: 'theme',
+    configValue: nextTheme,
+  })
+  ok(`Theme set to ${nextTheme}`)
+}
+
+async function handleVimCommand(state: CliState, rawArgs: string): Promise<void> {
+  const action = rawArgs.trim().toLowerCase()
+  if (!action || action === 'status') {
+    info(`Vim mode is ${(state.settings.vimMode ?? false) ? 'on' : 'off'}`)
+    info('Usage: /vim <on|off|toggle>')
+    return
+  }
+
+  let nextValue: boolean
+  if (action === 'toggle') {
+    nextValue = !(state.settings.vimMode ?? false)
+  } else if (action === 'on' || action === 'enable' || action === 'enabled') {
+    nextValue = true
+  } else if (action === 'off' || action === 'disable' || action === 'disabled') {
+    nextValue = false
+  } else {
+    fail('Usage: /vim <on|off|toggle>')
+    return
+  }
+
+  await updateSettings(state, settings => ({
+    ...settings,
+    vimMode: nextValue,
+  }))
+  await runHookSafely('config-changed', state, {
+    configKey: 'vimMode',
+    configValue: String(nextValue),
+  })
+  ok(`Vim mode ${nextValue ? 'enabled' : 'disabled'}`)
 }
 
 async function handleCompactCommand(state: CliState, rawArgs: string): Promise<void> {
@@ -4647,7 +5027,7 @@ async function handleTaskCommand(state: CliState, rawArgs: string): Promise<void
         ? [{ role: 'system', content: taskSkillMessage }, ...cloneMessages(state.messages)]
         : cloneMessages(state.messages),
     })
-    launchTaskRunner(task.id)
+    await recordTaskRunnerPid(task.id, launchTaskRunner(task.id))
     await appendTaskLog(task.id, `[${new Date().toISOString()}] launched from session ${state.sessionId}`)
     await runHookSafely('task-created', state, {
       taskId: task.id,
@@ -4673,6 +5053,28 @@ async function handleTaskCommand(state: CliState, rawArgs: string): Promise<void
     return
   }
 
+  if (action === 'output' || action === 'result') {
+    if (!rest) {
+      fail('Usage: /task output <id>')
+      return
+    }
+    const task = await getTask(rest)
+    if (!task) {
+      fail(`Task not found: ${rest}`)
+      return
+    }
+    printDivider()
+    if (task.result?.trim()) {
+      process.stdout.write(`${task.result}\n`)
+    } else if (task.error?.trim()) {
+      process.stdout.write(`${red(task.error)}\n`)
+    } else {
+      process.stdout.write(`${dim('(no task result yet)')}\n`)
+    }
+    printDivider()
+    return
+  }
+
   if (action === 'logs' || action === 'log') {
     if (!rest) {
       fail('Usage: /task logs <id>')
@@ -4685,7 +5087,45 @@ async function handleTaskCommand(state: CliState, rawArgs: string): Promise<void
     return
   }
 
-  fail('Usage: /task start <prompt> | /task show <id> | /task logs <id>')
+  if (action === 'stop' || action === 'cancel') {
+    if (!rest) {
+      fail('Usage: /task stop <id>')
+      return
+    }
+    const task = await stopTask(rest)
+    ok(`Stopped task ${task.id}`)
+    return
+  }
+
+  if (action === 'retry' || action === 'restart') {
+    if (!rest) {
+      fail('Usage: /task retry <id>')
+      return
+    }
+    const task = await restartTask(rest)
+    ok(`Restarted task ${task.id}`)
+    return
+  }
+
+  if (action === 'update') {
+    const match = rest.match(/^(\S+)\s+([\s\S]+)$/)
+    const id = match?.[1]
+    const prompt = stripWrappingQuotes(match?.[2]?.trim() ?? '')
+    if (!id || !prompt) {
+      fail('Usage: /task update <id> <prompt>')
+      return
+    }
+    const task = await updateTaskMetadata(id, {
+      title: truncate(prompt, MAX_MESSAGE_TITLE_LENGTH),
+      prompt,
+    })
+    ok(`Updated task ${task.id}`)
+    return
+  }
+
+  fail(
+    'Usage: /task start <prompt> | /task show <id> | /task logs <id> | /task output <id> | /task stop <id> | /task retry <id> | /task update <id> <prompt>',
+  )
 }
 
 async function runCompatibleSlashCommand(
@@ -5184,6 +5624,12 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'model':
       await handleModelCommand(state, command.rawArgs)
       return true
+    case 'theme':
+      await handleThemeCommand(state, command.rawArgs)
+      return true
+    case 'vim':
+      await handleVimCommand(state, command.rawArgs)
+      return true
     case 'workspace':
       await handleWorkspaceCommand(state, command.rawArgs)
       return true
@@ -5349,7 +5795,18 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'resume':
       await handleResumeCommand(state, command.rawArgs)
       return true
+    case 'branch':
+      await handleBranchCommand(state, command.rawArgs)
+      return true
+    case 'summary':
+      await handleSummaryCommand(state, command.rawArgs)
+      return true
+    case 'thinkback':
+    case 'insights':
+      await handleThinkbackCommand(state)
+      return true
     case 'title':
+    case 'rename':
       await handleTitleCommand(state, command.rawArgs)
       return true
     case 'delete-session':

@@ -26,6 +26,8 @@ type StatusSnapshot = {
   attachments?: string
   workspace?: string
   access?: string
+  theme?: string
+  vim?: string
   safeWrite?: string
   style?: string
   provider?: string
@@ -118,6 +120,8 @@ function parseStatusSnapshot(line: string): Partial<StatusSnapshot> | null {
     ['attachments', 'attachments '],
     ['workspace', 'workspace '],
     ['access', 'access '],
+    ['theme', 'theme '],
+    ['vim', 'vim '],
     ['safeWrite', 'safe-write '],
     ['style', 'style '],
     ['provider', 'provider '],
@@ -382,6 +386,8 @@ function RoyCodeTui(): React.ReactElement {
             <Text color="gray">provider: {snapshot.provider ?? 'unknown'}</Text>
             <Text color="gray">model: {snapshot.model ?? 'unknown'}</Text>
             <Text color="gray">access: {snapshot.access ?? 'unknown'}</Text>
+            <Text color="gray">theme: {snapshot.theme ?? 'unknown'}</Text>
+            <Text color="gray">vim: {snapshot.vim ?? 'unknown'}</Text>
             <Text color="gray">safe-write: {snapshot.safeWrite ?? 'unknown'}</Text>
             <Text color="gray">mode: {snapshot.mode ?? 'unknown'}</Text>
             <Text color="gray">skills: {snapshot.skills ?? 'unknown'}</Text>

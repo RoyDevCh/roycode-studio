@@ -5,7 +5,17 @@ import {
   runWorkspaceCommand,
   searchWorkspace,
 } from './filesystem.js'
-import { getTask, listTasks, createTask, launchTaskRunner } from './tasks.js'
+import {
+  createTask,
+  getTask,
+  launchTaskRunner,
+  listTasks,
+  readTaskLog,
+  recordTaskRunnerPid,
+  restartTask,
+  stopTask,
+  updateTaskMetadata,
+} from './tasks.js'
 import {
   buildActiveSkillSystemMessage,
   buildLocalSkillPrompt,
@@ -690,6 +700,81 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
           prompt: { type: 'string', description: 'Detailed task prompt.' },
         },
         required: ['prompt'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'update_task',
+      description: 'Update the title and prompt for one RoyCode background task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Task id or unique prefix.' },
+          title: { type: 'string', description: 'Optional new short title.' },
+          prompt: { type: 'string', description: 'Optional new task prompt.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'stop_task',
+      description: 'Request cancellation for one RoyCode background task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Task id or unique prefix.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'restart_task',
+      description: 'Restart one RoyCode background task from scratch.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Task id or unique prefix.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_task_output',
+      description: 'Read the current result, error, and recent logs for one RoyCode task.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'Task id or unique prefix.' },
+        },
+        required: ['id'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'sleep',
+      description: 'Pause briefly before continuing a workflow. Use only for short waits.',
+      parameters: {
+        type: 'object',
+        properties: {
+          ms: {
+            type: 'number',
+            description: 'Milliseconds to sleep, capped to 30000.',
+            default: 1000,
+          },
+        },
       },
     },
   },
@@ -2155,7 +2240,7 @@ async function executeTool(
         cwd: request.cwd ?? '.',
         baseMessages: request.messages.slice(-8),
       })
-      launchTaskRunner(task.id)
+      await recordTaskRunnerPid(task.id, launchTaskRunner(task.id))
       return JSON.stringify(
         {
           id: task.id,
@@ -2166,6 +2251,49 @@ async function executeTool(
         null,
         2,
       )
+    }
+    case 'update_task': {
+      const task = await updateTaskMetadata(String(input.id ?? ''), {
+        title: input.title ? String(input.title) : undefined,
+        prompt: input.prompt ? String(input.prompt) : undefined,
+      })
+      return JSON.stringify(task, null, 2)
+    }
+    case 'stop_task': {
+      const task = await stopTask(String(input.id ?? ''))
+      return JSON.stringify(task, null, 2)
+    }
+    case 'restart_task': {
+      const task = await restartTask(String(input.id ?? ''))
+      return JSON.stringify(task, null, 2)
+    }
+    case 'read_task_output': {
+      const task = await getTask(String(input.id ?? ''))
+      if (!task) {
+        throw new Error(`Task not found: ${String(input.id ?? '')}`)
+      }
+      const log = await readTaskLog(task.id).catch(() => '')
+      return JSON.stringify(
+        {
+          id: task.id,
+          status: task.status,
+          result: task.result ?? null,
+          error: task.error ?? null,
+          recentLog: log
+            ? log
+                .split(/\r?\n/)
+                .slice(-40)
+                .join('\n')
+            : '',
+        },
+        null,
+        2,
+      )
+    }
+    case 'sleep': {
+      const ms = Math.max(0, Math.min(30_000, Number(input.ms ?? 1_000) || 1_000))
+      await new Promise(resolve => setTimeout(resolve, ms))
+      return JSON.stringify({ sleptMs: ms }, null, 2)
     }
     case 'list_cron_tasks': {
       const tasks = await listCronTasks(workspaceRoot)
@@ -2466,11 +2594,11 @@ async function executeTool(
           accessMode: settings.accessMode,
           safeWriteMode: settings.safeWriteMode,
           providerId: request.providerId,
-          model: localAgent?.model || request.model,
-          cwd: request.cwd ?? '.',
-          baseMessages: request.messages.slice(-6),
-        })
-        launchTaskRunner(task.id)
+        model: localAgent?.model || request.model,
+        cwd: request.cwd ?? '.',
+        baseMessages: request.messages.slice(-6),
+      })
+        await recordTaskRunnerPid(task.id, launchTaskRunner(task.id))
         createdTasks.push({
           member: member.name,
           agent: localAgent?.name ?? member.agentName ?? null,

@@ -19,7 +19,7 @@ const BUILT_RUNNER = path.join(APP_ROOT, 'dist-server', 'task-runner.js')
 const SOURCE_RUNNER = path.join(APP_ROOT, 'server', 'task-runner.ts')
 const TSX_CLI = path.join(APP_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs')
 
-export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed'
+export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
 export type TaskRecord = {
   id: string
@@ -40,6 +40,8 @@ export type TaskRecord = {
   result?: string
   error?: string
   logPath: string
+  runnerPid?: number
+  stopRequestedAt?: string
 }
 
 type TaskStore = {
@@ -161,7 +163,7 @@ export async function readTaskLog(taskId: string): Promise<string> {
   return readFile(task.logPath, 'utf8')
 }
 
-export function launchTaskRunner(taskId: string): void {
+export function launchTaskRunner(taskId: string): number | undefined {
   const args = existsSync(BUILT_RUNNER)
     ? [BUILT_RUNNER, '--id', taskId]
     : [TSX_CLI, SOURCE_RUNNER, '--id', taskId]
@@ -173,4 +175,90 @@ export function launchTaskRunner(taskId: string): void {
     env: process.env,
   })
   child.unref()
+  return child.pid ?? undefined
+}
+
+export async function recordTaskRunnerPid(
+  taskId: string,
+  runnerPid?: number,
+): Promise<TaskRecord | null> {
+  if (typeof runnerPid !== 'number' || !Number.isFinite(runnerPid)) {
+    return getTask(taskId)
+  }
+
+  return updateTask(taskId, current => ({
+    ...current,
+    runnerPid,
+  }))
+}
+
+export async function stopTask(taskId: string): Promise<TaskRecord> {
+  const task = await getTask(taskId)
+  if (!task) {
+    throw new Error(`Task not found: ${taskId}`)
+  }
+  if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+    return task
+  }
+
+  const stoppedAt = new Date().toISOString()
+  const updated = await updateTask(task.id, current => ({
+    ...current,
+    status: 'cancelled',
+    finishedAt: stoppedAt,
+    stopRequestedAt: stoppedAt,
+    error: undefined,
+  }))
+  await appendTaskLog(task.id, `[${stoppedAt}] cancelled by user`)
+
+  if (typeof task.runnerPid === 'number' && Number.isFinite(task.runnerPid)) {
+    try {
+      process.kill(task.runnerPid)
+    } catch {
+      // Ignore task-runner kill failures; the persistent state has already been updated.
+    }
+  }
+
+  return updated
+}
+
+export async function updateTaskMetadata(
+  taskId: string,
+  updates: {
+    title?: string
+    prompt?: string
+  },
+): Promise<TaskRecord> {
+  const task = await getTask(taskId)
+  if (!task) {
+    throw new Error(`Task not found: ${taskId}`)
+  }
+
+  return updateTask(task.id, current => ({
+    ...current,
+    title: updates.title?.trim() ? updates.title.trim() : current.title,
+    prompt: updates.prompt?.trim() ? updates.prompt.trim() : current.prompt,
+  }))
+}
+
+export async function restartTask(taskId: string): Promise<TaskRecord> {
+  const task = await getTask(taskId)
+  if (!task) {
+    throw new Error(`Task not found: ${taskId}`)
+  }
+
+  const reset = await updateTask(task.id, current => ({
+    ...current,
+    status: 'queued',
+    startedAt: undefined,
+    finishedAt: undefined,
+    result: undefined,
+    error: undefined,
+    stopRequestedAt: undefined,
+    runnerPid: undefined,
+  }))
+  await appendTaskLog(task.id, `[${new Date().toISOString()}] restarted`)
+  const runnerPid = launchTaskRunner(task.id)
+  const relaunched = await recordTaskRunnerPid(task.id, runnerPid)
+  return relaunched ?? reset
 }

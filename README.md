@@ -49,6 +49,9 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - Claude-style `allowed-tools`, `tools`, and `disallowedTools` names such as `Read`, `Grep`, `Bash`, `WebFetch`, and `Agent` are now mapped onto RoyCode's local tool names
 - RoyCode CLI supports pasted multi-line input via `/multiline` and non-interactive stdin piping for scripted use
 - RoyCode CLI now supports Claude-style conversation workflow commands such as `/compact`, `/rewind`, and `/export`
+- RoyCode CLI now also supports conversation branching, session summaries, and local history insights through `/branch`, `/summary`, `/thinkback`, and `/insights`
+- RoyCode CLI now supports local theme and vim-mode preferences through `/theme` and `/vim`
+- RoyCode background tasks now support output inspection, prompt updates, cancellation, and restart flows from both the CLI and the shared agent tools
 - RoyCode hooks now accept JSON stdin and structured JSON stdout so hooks can emit `systemMessage`, block execution, attach extra context, mutate prompt input, and filter by matcher text or regex more like Claude Code hooks
 - Sidebar project rail for quick workspace switching, with a chat list that behaves more like a project tree + session tree
 - Project rail now supports search, favorites, and recent-project grouping
@@ -244,7 +247,7 @@ npm run tui
 
 The TUI now keeps a small workspace/session panel, shortcut rail, recent input list, and a live output pane so the default `roycode` launcher feels closer to a terminal application instead of a plain line prompt.
 
-The TUI also now surfaces the current execution mode from `/status`, plus direct shortcuts for `/cron`, `/worktree`, and `/plan-mode status`, so it behaves more like a lightweight terminal app shell than a plain wrapper.
+The TUI also now surfaces the current execution mode, theme preference, and vim-mode preference from `/status`, plus direct shortcuts for `/cron`, `/worktree`, and `/plan-mode status`, so it behaves more like a lightweight terminal app shell than a plain wrapper.
 
 Global terminal command:
 
