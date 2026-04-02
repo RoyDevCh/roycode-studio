@@ -50,11 +50,15 @@ npm run desktop
 
 ### `roycode`
 
-Launches the Ink-style TUI. This is the best default choice when working in a terminal.
+Launches the native single-process TUI by default. This is the closest mode to the Claude Code style terminal experience.
 
 ### `roycode --plain`
 
-Launches the line-based CLI without the TUI wrapper.
+Launches the line-based CLI explicitly.
+
+### `roycode --tui`
+
+Launches the Ink-style TUI explicitly. This is mostly useful when you want to force the terminal UI from scripts or custom launchers.
 
 ### `roycode-full`
 

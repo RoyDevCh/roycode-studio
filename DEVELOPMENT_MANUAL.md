@@ -47,7 +47,7 @@ The most important runtime folder is `server/`.
 ### TUI
 
 - entry: `server/tui.tsx`
-- purpose: Ink wrapper around the CLI process with workspace/status panes and shortcuts
+- purpose: native single-process Ink terminal shell that embeds the shared CLI runtime, workspace/status panes, structured questions, and shortcuts
 
 ## 4. High-Level Runtime Architecture
 
@@ -764,7 +764,7 @@ Treat RoyCode as:
 
 If future work continues, the highest-value next steps are:
 
-1. deeper Ink REPL parity instead of the current shell-wrapper TUI
+1. deeper Ink REPL parity beyond the current native single-process TUI shell
 2. richer prompt suggestion/speculation
 3. stronger LSP coverage beyond TS/JS
 4. richer task/team orchestration semantics

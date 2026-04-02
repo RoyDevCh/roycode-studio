@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline/promises'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   buildFileTree,
   readWorkspaceFile,
@@ -286,7 +286,7 @@ type CliAttachment = {
   truncated: boolean
 }
 
-type CliOptions = {
+export type CliOptions = {
   help: boolean
   prompt?: string
   printMode: boolean
@@ -310,7 +310,7 @@ type CliOptions = {
   outputFormat?: string
 }
 
-type CliState = {
+export type CliState = {
   settings: AppSettings
   cwd: string
   messages: AgentMessage[]
@@ -367,6 +367,43 @@ const CYAN = '\x1b[36m'
 
 let activeReadline: ReturnType<typeof createInterface> | null = null
 let colorModeOverride: 'auto' | 'on' | 'off' = 'auto'
+export type CliOutputTarget = {
+  write: (text: string) => void
+  clear?: () => void
+}
+
+type CliStructuredQuestionHandler = (
+  request: StructuredQuestionRequest,
+) => Promise<StructuredQuestionResponse>
+
+let cliOutputTarget: CliOutputTarget | null = null
+let cliStructuredQuestionHandler: CliStructuredQuestionHandler | null = null
+
+export function setCliOutputTarget(target: CliOutputTarget | null): void {
+  cliOutputTarget = target
+}
+
+export function setCliStructuredQuestionHandler(
+  handler: CliStructuredQuestionHandler | null,
+): void {
+  cliStructuredQuestionHandler = handler
+}
+
+function writeStdout(text: string): void {
+  if (cliOutputTarget) {
+    cliOutputTarget.write(text)
+    return
+  }
+  process.stdout.write(text)
+}
+
+function clearOutput(): void {
+  if (cliOutputTarget?.clear) {
+    cliOutputTarget.clear()
+    return
+  }
+  console.clear()
+}
 
 function supportsColor(): boolean {
   if (colorModeOverride === 'on') {
@@ -383,19 +420,19 @@ function colorize(value: string, color: string): string {
 }
 
 function info(text: string): void {
-  process.stdout.write(`${colorize('i', BLUE)} ${text}\n`)
+  writeStdout(`${colorize('i', BLUE)} ${text}\n`)
 }
 
 function ok(text: string): void {
-  process.stdout.write(`${colorize('+', GREEN)} ${text}\n`)
+  writeStdout(`${colorize('+', GREEN)} ${text}\n`)
 }
 
 function warn(text: string): void {
-  process.stdout.write(`${colorize('!', YELLOW)} ${text}\n`)
+  writeStdout(`${colorize('!', YELLOW)} ${text}\n`)
 }
 
 function fail(text: string): void {
-  process.stdout.write(`${colorize('x', RED)} ${text}\n`)
+  writeStdout(`${colorize('x', RED)} ${text}\n`)
 }
 
 function label(text: string): string {
@@ -431,7 +468,7 @@ function magenta(text: string): string {
 }
 
 function printDivider(): void {
-  process.stdout.write(`${dim('-'.repeat(88))}\n`)
+  writeStdout(`${dim('-'.repeat(88))}\n`)
 }
 
 async function execProcessCapture(
@@ -579,7 +616,7 @@ function deriveTitleFromPrompt(rawInput: string): string {
   return truncate(normalized, MAX_MESSAGE_TITLE_LENGTH)
 }
 
-function createFreshState(settings: AppSettings): CliState {
+export function createFreshState(settings: AppSettings): CliState {
   return {
     settings,
     cwd: '.',
@@ -902,7 +939,7 @@ function findProvider(settings: AppSettings, token: string): ProviderConfig | nu
   )
 }
 
-function buildPromptLabel(state: CliState): string {
+export function buildPromptLabel(state: CliState): string {
   const provider = getSelectedProvider(state.settings)
   const model = resolveModel(state.settings, provider)
   const shortModel = model.length > 24 ? `${model.slice(0, 24)}...` : model
@@ -1263,7 +1300,7 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
   }
 }
 
-function resolveStructuredQuestionAnswer(
+export function resolveStructuredQuestionAnswer(
   rawAnswer: string,
   question: StructuredQuestionPrompt,
 ): string | null {
@@ -1321,6 +1358,9 @@ function resolveStructuredQuestionAnswer(
 async function askStructuredQuestions(
   request: StructuredQuestionRequest,
 ): Promise<StructuredQuestionResponse> {
+  if (cliStructuredQuestionHandler) {
+    return cliStructuredQuestionHandler(request)
+  }
   if (!activeReadline || !process.stdin.isTTY || !process.stdout.isTTY) {
     throw new Error('Structured questions require an interactive RoyCode terminal session')
   }
@@ -1332,13 +1372,13 @@ async function askStructuredQuestions(
 
   const answers: Record<string, string> = {}
   for (const question of request.questions) {
-    process.stdout.write(`\n${label(question.header)} ${question.question}\n`)
+    writeStdout(`\n${label(question.header)} ${question.question}\n`)
     question.options.forEach((option, index) => {
-      process.stdout.write(
+      writeStdout(
         `  ${dim(`${index + 1}.`)} ${option.label}${option.description ? dim(` - ${option.description}`) : ''}\n`,
       )
     })
-    process.stdout.write(
+    writeStdout(
       `${dim(
         question.multiSelect
           ? 'Enter one or more option numbers/labels separated by commas.'
@@ -1365,7 +1405,7 @@ async function askStructuredQuestions(
 function printStatus(state: CliState): void {
   const provider = getSelectedProvider(state.settings)
   const model = resolveModel(state.settings, provider)
-  process.stdout.write(
+  writeStdout(
     [
       `${label('session')} ${state.sessionTitle} (${dim(state.sessionId)})`,
       `${label('messages')} ${formatMessageCount(state.messages)}`,
@@ -1402,20 +1442,20 @@ function printStatus(state: CliState): void {
   )
 }
 
-function printBanner(state: CliState): void {
+export function printBanner(state: CliState): void {
   printDivider()
-  process.stdout.write(`${label('RoyCode CLI')}\n`)
-  process.stdout.write(
+  writeStdout(`${label('RoyCode CLI')}\n`)
+  writeStdout(
     `${dim('Claude Code style terminal workflow built on the local RoyCode agent core.')}\n`,
   )
-  process.stdout.write(
+  writeStdout(
     `${dim('Type /help for commands. Type /multiline for pasted blocks. Normal input sends a prompt. Hooks, skills, and tasks are available.')}\n`,
   )
   printDivider()
   printStatus(state)
 }
 
-async function saveCurrentSession(state: CliState): Promise<void> {
+export async function saveCurrentSession(state: CliState): Promise<void> {
   if (!shouldPersistSession(state)) {
     return
   }
@@ -1445,7 +1485,7 @@ async function saveCurrentSession(state: CliState): Promise<void> {
 }
 
 function printCliUsage(): void {
-  process.stdout.write(
+  writeStdout(
     [
       'Usage:',
       '  npm run cli -- [options]',
@@ -1454,7 +1494,7 @@ function printCliUsage(): void {
       '  --help                 Show CLI help',
       '  --prompt <text>        Run one prompt and exit',
       '  -p, --print <text>     Claude-style print mode (plain final answer)',
-      '  --plain                Force the direct line-based CLI instead of the TUI launcher',
+      '  --plain                Force the direct line-based CLI instead of the native TUI',
       '  --web-search <query>   Run one web search and exit',
       '  --web-fetch <url>      Fetch one public URL and exit',
       '  --workspace <path>     Set workspace root',
@@ -1479,8 +1519,8 @@ function printCliUsage(): void {
       '  --new                  Force a fresh session',
       '',
       'Notes:',
-      '  - The "roycode" launcher now opens an Ink-style TUI by default in interactive terminals.',
-      '  - Use --plain if you want the direct line-based CLI instead of the TUI wrapper.',
+      '  - The "roycode" launcher now starts the native TUI in interactive terminals.',
+      '  - Use --plain if you want the direct line-based CLI explicitly.',
       '  - Paths with spaces are supported. If your shell needs it, wrap them in quotes.',
       '  - In piped mode, each incoming line is processed as a prompt or slash command.',
       '',
@@ -1490,8 +1530,8 @@ function printCliUsage(): void {
 
 function printHelp(): void {
   printDivider()
-  process.stdout.write(`${label('Local commands')}\n`)
-  process.stdout.write(
+  writeStdout(`${label('Local commands')}\n`)
+  writeStdout(
     [
       '/help - show help',
       '/status - show current session status',
@@ -1706,7 +1746,7 @@ function printHelp(): void {
   printDivider()
 }
 
-function parseCliArgs(argv: string[]): CliOptions {
+export function parseCliArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     help: false,
     printMode: false,
@@ -1926,7 +1966,7 @@ function printProviders(state: CliState): void {
   const current = getSelectedProvider(state.settings)
   for (const provider of state.settings.providers) {
     const marker = provider.id === current.id ? green('*') : dim('-')
-    process.stdout.write(
+    writeStdout(
       `${marker} ${provider.id} ${dim(`(${provider.name})`)} ${provider.apiKey ? green('key') : red('no-key')} ${dim(provider.baseUrl)}\n`,
     )
   }
@@ -1937,7 +1977,7 @@ function printModels(state: CliState): void {
   const currentModel = resolveModel(state.settings, provider)
   for (const model of provider.models) {
     const marker = model === currentModel ? green('*') : dim('-')
-    process.stdout.write(`${marker} ${model}\n`)
+    writeStdout(`${marker} ${model}\n`)
   }
 }
 
@@ -1948,7 +1988,7 @@ function printAttachments(attachments: CliAttachment[]): void {
   }
 
   for (const attachment of attachments) {
-    process.stdout.write(
+    writeStdout(
       `${dim('-')} ${attachment.path}${attachment.truncated ? dim(' [truncated]') : ''}\n`,
     )
   }
@@ -1963,7 +2003,7 @@ function printHooksList(
   }
 
   for (const hook of hooks) {
-    process.stdout.write(
+    writeStdout(
       `${hook.enabled ? green('*') : dim('-')} ${hook.id} ${dim(`[${hook.event}]`)} ${truncate(hook.command, 160)}${hook.matcher ? ` ${dim(`match=${hook.matcher}`)}` : ''}${hook.enabled ? '' : dim(' [disabled]')}\n`,
     )
   }
@@ -1984,7 +2024,7 @@ function printSkillList(
   for (const skill of skills) {
     const marker = active.has(skill.name.toLowerCase()) ? green('*') : dim('-')
     const sourceLabel = skill.source ? ` ${dim(`[${skill.source}]`)}` : ''
-    process.stdout.write(`${marker} ${skill.name}${sourceLabel} ${dim(skill.summary)}\n`)
+    writeStdout(`${marker} ${skill.name}${sourceLabel} ${dim(skill.summary)}\n`)
   }
 }
 
@@ -1998,20 +2038,20 @@ function printCompatCommandList(
   }
 
   if (localCommands.length) {
-    process.stdout.write(`${label('Local Claude Commands')}\n`)
+    writeStdout(`${label('Local Claude Commands')}\n`)
     for (const command of localCommands) {
       const sourceLabel = command.source ? ` ${dim(`[${command.source}]`)}` : ''
-      process.stdout.write(`- ${command.name}${sourceLabel} ${dim(command.summary)}\n`)
+      writeStdout(`- ${command.name}${sourceLabel} ${dim(command.summary)}\n`)
     }
   }
 
   if (pluginCommands.length) {
     if (localCommands.length) {
-      process.stdout.write('\n')
+      writeStdout('\n')
     }
-    process.stdout.write(`${label('Plugin Commands')}\n`)
+    writeStdout(`${label('Plugin Commands')}\n`)
     for (const command of pluginCommands) {
-      process.stdout.write(`- ${command.name} ${dim(command.description)}\n`)
+      writeStdout(`- ${command.name} ${dim(command.description)}\n`)
     }
   }
 }
@@ -2026,7 +2066,7 @@ function printAgentList(
 
   for (const agent of agents) {
     const sourceLabel = agent.source ? ` ${dim(`[${agent.source}]`)}` : ''
-    process.stdout.write(`- ${agent.name}${sourceLabel} ${dim(agent.description)}\n`)
+    writeStdout(`- ${agent.name}${sourceLabel} ${dim(agent.description)}\n`)
   }
 }
 
@@ -2041,7 +2081,7 @@ function printPluginList(
   for (const plugin of plugins) {
     const marker = plugin.enabled ? green('*') : dim('-')
     const version = plugin.version ? ` v${plugin.version}` : ''
-    process.stdout.write(`${marker} ${plugin.name}${version} ${dim(plugin.description)}\n`)
+    writeStdout(`${marker} ${plugin.name}${version} ${dim(plugin.description)}\n`)
   }
 }
 
@@ -2061,7 +2101,7 @@ function printPluginCommandList(
   for (const command of commands) {
     const suffix = command.argumentHint ? ` ${dim(`args: ${command.argumentHint}`)}` : ''
     const kind = command.kind ? `${dim(`[${command.kind}]`)} ` : ''
-    process.stdout.write(`${kind}${command.name} ${dim(command.description)}${suffix}\n`)
+    writeStdout(`${kind}${command.name} ${dim(command.description)}${suffix}\n`)
   }
 }
 
@@ -2077,7 +2117,7 @@ function printMcpServerList(servers: LocalMcpServerConfig[]): void {
       server.transport === 'stdio'
         ? `${server.command}${server.args.length ? ` ${server.args.join(' ')}` : ''}`
         : server.url
-    process.stdout.write(
+    writeStdout(
       `${marker} ${server.name} ${dim(`[${server.transport}]`)}${server.source ? ` ${dim(`[${server.source}]`)}` : ''} ${dim(details)}\n`,
     )
   }
@@ -2098,7 +2138,7 @@ function printTaskList(
   }
 
   for (const task of tasks) {
-    process.stdout.write(
+    writeStdout(
       `${task.id} ${dim(`[${task.status}]`)} ${task.title}\n   ${dim(task.workspaceRoot)} ${dim(task.updatedAt)}\n`,
     )
   }
@@ -2122,8 +2162,8 @@ function printTaskDetails(task: {
   error?: string
 }): void {
   printDivider()
-  process.stdout.write(`${label(task.title)} ${dim(task.id)}\n`)
-  process.stdout.write(
+  writeStdout(`${label(task.title)} ${dim(task.id)}\n`)
+  writeStdout(
     [
       `${label('status')} ${task.status}`,
       `${label('workspace')} ${task.workspaceRoot}`,
@@ -2139,12 +2179,12 @@ function printTaskDetails(task: {
       }`,
     ].join(` ${dim('|')} `) + '\n',
   )
-  process.stdout.write(`\n${label('prompt')}\n${task.prompt}\n`)
+  writeStdout(`\n${label('prompt')}\n${task.prompt}\n`)
   if (task.error) {
-    process.stdout.write(`\n${red('error')} ${task.error}\n`)
+    writeStdout(`\n${red('error')} ${task.error}\n`)
   }
   if (task.result) {
-    process.stdout.write(`\n${task.result}\n`)
+    writeStdout(`\n${task.result}\n`)
   }
   printDivider()
 }
@@ -2239,7 +2279,7 @@ function printRuleList(rules: LocalRuleDocument[]): void {
 
   for (const rule of rules) {
     const pathInfo = rule.paths?.length ? ` ${dim(`[paths: ${rule.paths.join(', ')}]`)}` : ''
-    process.stdout.write(
+    writeStdout(
       `- ${rule.name} ${dim(`[${rule.source}]`)}${pathInfo} ${dim(rule.description)}\n`,
     )
   }
@@ -2258,7 +2298,7 @@ function printOutputStyleDocs(
   }
 
   for (const style of styles) {
-    process.stdout.write(
+    writeStdout(
       `- ${style.name} ${dim(`[${style.source}]`)} ${dim(style.description)}\n`,
     )
   }
@@ -2275,12 +2315,12 @@ function printAvailableOutputStylesList(
   const normalizedCurrent = currentStyle.toLowerCase()
   const defaultMarker =
     normalizedCurrent === DEFAULT_OUTPUT_STYLE_NAME ? green('*') : dim('-')
-  process.stdout.write(
+  writeStdout(
     `${defaultMarker} ${DEFAULT_OUTPUT_STYLE_NAME} ${dim('[built-in]')} ${dim('RoyCode default output behavior')}\n`,
   )
   for (const style of styles) {
     const marker = style.name.toLowerCase() === normalizedCurrent ? green('*') : dim('-')
-    process.stdout.write(
+    writeStdout(
       `${marker} ${style.name} ${dim(`[${style.source}]`)} ${dim(style.description)}\n`,
     )
   }
@@ -2296,7 +2336,7 @@ function printTodoList(todos: TodoItem[]): void {
     const status =
       todo.status === 'completed' ? green(todo.status) : todo.status === 'in_progress' ? yellow(todo.status) : dim(todo.status)
     const note = todo.note ? ` ${dim(`(${todo.note})`)}` : ''
-    process.stdout.write(`- [${status}] ${todo.content}${note}\n`)
+    writeStdout(`- [${status}] ${todo.content}${note}\n`)
   }
 }
 
@@ -2304,9 +2344,9 @@ function printKeyValueBlock(
   title: string,
   entries: Array<{ label: string; value: string }>,
 ): void {
-  process.stdout.write(`${label(title)}\n`)
+  writeStdout(`${label(title)}\n`)
   for (const entry of entries) {
-    process.stdout.write(`- ${entry.label}: ${entry.value}\n`)
+    writeStdout(`- ${entry.label}: ${entry.value}\n`)
   }
 }
 
@@ -2324,7 +2364,7 @@ function printTeamMessages(
   }
 
   for (const message of messages) {
-    process.stdout.write(
+    writeStdout(
       `- [${message.createdAt}] ${message.from} -> ${message.to}: ${message.content}\n`,
     )
   }
@@ -2356,7 +2396,7 @@ function printWorktreeList(
     ]
       .filter(Boolean)
       .join(', ')
-    process.stdout.write(
+    writeStdout(
       `${marker} ${worktree.path}${flags ? ` ${dim(`[${flags}]`)}` : ''}\n`,
     )
   }
@@ -2398,10 +2438,10 @@ function printCronTaskList(tasks: Array<{
   }
 
   for (const task of tasks) {
-    process.stdout.write(
+    writeStdout(
       `${dim('-')} ${task.id} ${dim(`(${cronToHuman(task.cron)})`)} ${task.recurring === false ? yellow('once') : green('repeat')}\n`,
     )
-    process.stdout.write(
+    writeStdout(
       `    ${truncate(task.prompt, 120)}${task.nextRunAt ? dim(` | next ${task.nextRunAt}`) : ''}\n`,
     )
   }
@@ -2500,10 +2540,10 @@ async function runHookSafely(
   try {
     const result = await runHook(event, buildHookContext(state, extra))
     if (result.systemMessage) {
-      process.stdout.write(`${dim(`[hook:${event}] ${result.systemMessage}`)}\n`)
+      writeStdout(`${dim(`[hook:${event}] ${result.systemMessage}`)}\n`)
     }
     if (result.displayOutput) {
-      process.stdout.write(
+      writeStdout(
         `${dim(`[hook:${event}] ${truncate(result.displayOutput.replace(/\s+/g, ' '), 180)}`)}\n`,
       )
     }
@@ -2595,7 +2635,7 @@ function printPendingChanges(changes: PendingChange[]): void {
   }
 
   for (const change of changes) {
-    process.stdout.write(
+    writeStdout(
       `${magenta(change.source === 'agent' ? 'agent' : 'manual')} ${change.path} ${dim(change.updatedAt)}\n`,
     )
   }
@@ -2649,15 +2689,15 @@ async function handleWorkspaceCommand(state: CliState, rawArgs: string): Promise
   const nextRoot = stripWrappingQuotes(rawArgs)
   if (!nextRoot) {
     printDivider()
-    process.stdout.write(`${label('Workspace')}\n`)
-    process.stdout.write(`${state.settings.workspaceRoot}\n`)
+    writeStdout(`${label('Workspace')}\n`)
+    writeStdout(`${state.settings.workspaceRoot}\n`)
     const extraDirs = getAdditionalWorkspaceRoots(state.settings)
-    process.stdout.write(`\n${label('Additional Dirs')}\n`)
+    writeStdout(`\n${label('Additional Dirs')}\n`)
     if (!extraDirs.length) {
-      process.stdout.write(`${dim('(none)')}\n`)
+      writeStdout(`${dim('(none)')}\n`)
     } else {
       for (const dir of extraDirs) {
-        process.stdout.write(`- ${dir}\n`)
+        writeStdout(`- ${dir}\n`)
       }
     }
     printDivider()
@@ -2687,12 +2727,12 @@ async function handleAddDirCommand(state: CliState, rawArgs: string): Promise<vo
   if (!action || action === 'list' || action === 'show' || action === 'status') {
     const extraDirs = getAdditionalWorkspaceRoots(state.settings)
     printDivider()
-    process.stdout.write(`${label('Additional Workspace Directories')}\n`)
+    writeStdout(`${label('Additional Workspace Directories')}\n`)
     if (!extraDirs.length) {
-      process.stdout.write(`${dim('(none)')}\n`)
+      writeStdout(`${dim('(none)')}\n`)
     } else {
       for (const dir of extraDirs) {
-        process.stdout.write(`- ${dir}\n`)
+        writeStdout(`- ${dir}\n`)
       }
     }
     printDivider()
@@ -2846,13 +2886,13 @@ async function handleEnvCommand(state: CliState, rawArgs: string): Promise<void>
 
   if (!action || action === 'list' || action === 'show' || action === 'status') {
     printDivider()
-    process.stdout.write(`${label('Shell Env Overrides')}\n`)
+    writeStdout(`${label('Shell Env Overrides')}\n`)
     const entries = Object.entries(envMap).sort((left, right) => left[0].localeCompare(right[0]))
     if (!entries.length) {
-      process.stdout.write(`${dim('(none)')}\n`)
+      writeStdout(`${dim('(none)')}\n`)
     } else {
       for (const [key, value] of entries) {
-        process.stdout.write(`- ${key}=${dim(maskSecretValue(value))}\n`)
+        writeStdout(`- ${key}=${dim(maskSecretValue(value))}\n`)
       }
     }
     printDivider()
@@ -2879,7 +2919,7 @@ async function handleEnvCommand(state: CliState, rawArgs: string): Promise<void>
       return
     }
     printDivider()
-    process.stdout.write(`${label(key)}\n${envMap[key]}\n`)
+    writeStdout(`${label(key)}\n${envMap[key]}\n`)
     printDivider()
     return
   }
@@ -2928,8 +2968,8 @@ async function handleTerminalSetupCommand(): Promise<void> {
   const globalPowerShellLauncher = appData ? path.join(appData, 'npm', 'roycode.ps1') : '(unknown)'
   const globalCmdLauncher = appData ? path.join(appData, 'npm', 'roycode.cmd') : '(unknown)'
   printDivider()
-  process.stdout.write(`${label('Terminal Setup')}\n`)
-  process.stdout.write(
+  writeStdout(`${label('Terminal Setup')}\n`)
+  writeStdout(
     [
       `- app root: ${APP_ROOT}`,
       `- CLI from source: npm run cli`,
@@ -2950,8 +2990,8 @@ async function handleDesktopInfoCommand(): Promise<void> {
   const unpackedExists = await stat(unpackedExe).then(() => true).catch(() => false)
 
   printDivider()
-  process.stdout.write(`${label('Desktop Entry Points')}\n`)
-  process.stdout.write(
+  writeStdout(`${label('Desktop Entry Points')}\n`)
+  writeStdout(
     [
       `- source launch: npm run desktop`,
       `- packaged build: npm run desktop:dist`,
@@ -2992,9 +3032,9 @@ async function handleFilesCommand(state: CliState, rawArgs: string): Promise<voi
     state.settings.accessMode,
   )
 
-  process.stdout.write(`${label('Files')} ${requestedPath} ${dim(`(depth ${depth})`)}\n`)
+  writeStdout(`${label('Files')} ${requestedPath} ${dim(`(depth ${depth})`)}\n`)
   const lines = formatTree(tree)
-  process.stdout.write(`${lines.join('\n') || dim('(empty)')}\n`)
+  writeStdout(`${lines.join('\n') || dim('(empty)')}\n`)
 }
 
 async function handleReadCommand(state: CliState, rawArgs: string): Promise<void> {
@@ -3010,8 +3050,8 @@ async function handleReadCommand(state: CliState, rawArgs: string): Promise<void
     state.settings.accessMode,
   )
   printDivider()
-  process.stdout.write(`${label(targetPath)}\n`)
-  process.stdout.write(`${formatTextPreview(content)}\n`)
+  writeStdout(`${label(targetPath)}\n`)
+  writeStdout(`${formatTextPreview(content)}\n`)
   printDivider()
 }
 
@@ -3036,7 +3076,7 @@ async function handleSearchCommand(state: CliState, rawArgs: string): Promise<vo
   }
 
   for (const result of results) {
-    process.stdout.write(`${result.path}:${result.line} ${dim(result.preview)}\n`)
+    writeStdout(`${result.path}:${result.line} ${dim(result.preview)}\n`)
   }
 }
 
@@ -3054,7 +3094,7 @@ async function handleWebSearchCommand(rawArgs: string): Promise<void> {
   }
 
   for (const [index, result] of results.entries()) {
-    process.stdout.write(
+    writeStdout(
       `${index + 1}. ${result.title}\n   ${result.url}\n   ${dim(result.snippet || result.domain)}\n`,
     )
   }
@@ -3069,10 +3109,10 @@ async function handleWebFetchCommand(rawArgs: string): Promise<void> {
 
   const result = await webFetch(url)
   printDivider()
-  process.stdout.write(`${label(result.title)}\n`)
-  process.stdout.write(`${dim(result.url)}\n`)
-  process.stdout.write(`${dim(result.contentType)}\n\n`)
-  process.stdout.write(`${result.text}\n`)
+  writeStdout(`${label(result.title)}\n`)
+  writeStdout(`${dim(result.url)}\n`)
+  writeStdout(`${dim(result.contentType)}\n\n`)
+  writeStdout(`${result.text}\n`)
   printDivider()
 }
 
@@ -3085,18 +3125,18 @@ async function handleMagicDocsCommand(state: CliState, rawArgs: string): Promise
     const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 20
     const docs = await listMagicDocs(state.settings.workspaceRoot, state.settings.accessMode)
     printDivider()
-    process.stdout.write(`${label('Magic Docs')}\n`)
-    process.stdout.write(
+    writeStdout(`${label('Magic Docs')}\n`)
+    writeStdout(
       `${dim(`workspace=${state.settings.workspaceRoot} total=${docs.length}`)}\n\n`,
     )
     if (!docs.length) {
-      process.stdout.write(`${dim('(no markdown/text docs found)')}\n`)
+      writeStdout(`${dim('(no markdown/text docs found)')}\n`)
     } else {
       for (const docPath of docs.slice(0, limit)) {
-        process.stdout.write(`- ${docPath}\n`)
+        writeStdout(`- ${docPath}\n`)
       }
       if (docs.length > limit) {
-        process.stdout.write(`\n${dim(`...and ${docs.length - limit} more`)}\n`)
+        writeStdout(`\n${dim(`...and ${docs.length - limit} more`)}\n`)
       }
     }
     printDivider()
@@ -3115,7 +3155,7 @@ async function handleMagicDocsCommand(state: CliState, rawArgs: string): Promise
       state.settings.accessMode,
     )
     printDivider()
-    process.stdout.write(`${label(entry.title)}\n${dim(entry.path)}\n\n${entry.content}\n`)
+    writeStdout(`${label(entry.title)}\n${dim(entry.path)}\n\n${entry.content}\n`)
     printDivider()
     return
   }
@@ -3132,16 +3172,16 @@ async function handleMagicDocsCommand(state: CliState, rawArgs: string): Promise
     state.settings.accessMode,
   )
   printDivider()
-  process.stdout.write(`${label('Magic Docs Search')}\n`)
-  process.stdout.write(`${dim(`query=${query}`)}\n\n`)
+  writeStdout(`${label('Magic Docs Search')}\n`)
+  writeStdout(`${dim(`query=${query}`)}\n\n`)
   if (!results.length) {
-    process.stdout.write(`${dim('(no matching docs found)')}\n`)
+    writeStdout(`${dim('(no matching docs found)')}\n`)
   } else {
     for (const result of results) {
-      process.stdout.write(`- ${result.path}\n`)
-      process.stdout.write(`  ${result.title}\n`)
+      writeStdout(`- ${result.path}\n`)
+      writeStdout(`  ${result.title}\n`)
       if (result.snippet) {
-        process.stdout.write(`  ${dim(result.snippet)}\n`)
+        writeStdout(`  ${dim(result.snippet)}\n`)
       }
     }
   }
@@ -3175,16 +3215,16 @@ async function handleIssueCommand(state: CliState, rawArgs: string): Promise<voi
       includePullRequests: true,
     })
     printDivider()
-    process.stdout.write(`${label('GitHub Issues')}\n`)
-    process.stdout.write(
+    writeStdout(`${label('GitHub Issues')}\n`)
+    writeStdout(
       `${dim(`${result.repo.owner}/${result.repo.repo} state=${issueState} count=${result.issues.length}`)}\n\n`,
     )
     if (!result.issues.length) {
-      process.stdout.write(`${dim('(no issues found)')}\n`)
+      writeStdout(`${dim('(no issues found)')}\n`)
     } else {
       for (const issue of result.issues) {
         const kind = issue.isPullRequest ? 'PR' : 'Issue'
-        process.stdout.write(
+        writeStdout(
           `- #${issue.number} [${issue.state}] ${issue.title} ${dim(`(${kind}, @${issue.author})`)}\n`,
         )
       }
@@ -3202,15 +3242,15 @@ async function handleIssueCommand(state: CliState, rawArgs: string): Promise<voi
 
   const result = await getGitHubIssue(state.settings.workspaceRoot, issueNumber)
   printDivider()
-  process.stdout.write(`${label(`#${result.issue.number} ${result.issue.title}`)}\n`)
-  process.stdout.write(
+  writeStdout(`${label(`#${result.issue.number} ${result.issue.title}`)}\n`)
+  writeStdout(
     `${dim(`${result.repo.owner}/${result.repo.repo} | ${result.issue.state} | @${result.issue.author} | ${result.issue.url}`)}\n`,
   )
   if (result.issue.labels.length) {
-    process.stdout.write(`${dim(`labels: ${result.issue.labels.join(', ')}`)}\n`)
+    writeStdout(`${dim(`labels: ${result.issue.labels.join(', ')}`)}\n`)
   }
-  process.stdout.write('\n')
-  process.stdout.write(`${result.issue.body || dim('(empty body)')}\n`)
+  writeStdout('\n')
+  writeStdout(`${result.issue.body || dim('(empty body)')}\n`)
   printDivider()
 }
 
@@ -3223,21 +3263,21 @@ async function handlePrCommentsCommand(state: CliState, rawArgs: string): Promis
 
   const result = await listPullRequestComments(state.settings.workspaceRoot, pullNumber)
   printDivider()
-  process.stdout.write(`${label(`PR #${pullNumber} Comments`)}\n`)
-  process.stdout.write(
+  writeStdout(`${label(`PR #${pullNumber} Comments`)}\n`)
+  writeStdout(
     `${dim(`${result.repo.owner}/${result.repo.repo} count=${result.comments.length}`)}\n\n`,
   )
   if (!result.comments.length) {
-    process.stdout.write(`${dim('(no comments found)')}\n`)
+    writeStdout(`${dim('(no comments found)')}\n`)
   } else {
     for (const comment of result.comments) {
       const location = comment.path
         ? ` ${dim(`${comment.path}${typeof comment.line === 'number' ? `:${comment.line}` : ''}`)}`
         : ''
-      process.stdout.write(
+      writeStdout(
         `- [${comment.kind}] @${comment.author}${location} ${dim(comment.createdAt)}\n`,
       )
-      process.stdout.write(`  ${truncate(comment.body.replace(/\s+/g, ' '), 220)}\n`)
+      writeStdout(`  ${truncate(comment.body.replace(/\s+/g, ' '), 220)}\n`)
     }
   }
   printDivider()
@@ -3258,7 +3298,7 @@ async function handleRunCommand(state: CliState, rawArgs: string): Promise<void>
     state.settings.accessMode,
   )
   printDivider()
-  process.stdout.write(`${output}\n`)
+  writeStdout(`${output}\n`)
   printDivider()
 }
 
@@ -3339,7 +3379,7 @@ async function handleGitCommand(state: CliState, rawArgs: string): Promise<void>
       return
     }
 
-    process.stdout.write(
+    writeStdout(
       [
         `${label('branch')} ${status.branch}`,
         `${label('ahead')} ${status.ahead}`,
@@ -3351,7 +3391,7 @@ async function handleGitCommand(state: CliState, rawArgs: string): Promise<void>
     )
 
     for (const file of status.files.slice(0, 30)) {
-      process.stdout.write(
+      writeStdout(
         `${file.staged ? green('S') : dim('-')}${file.unstaged ? colorize('U', YELLOW) : dim('-')} ${file.path}\n`,
       )
     }
@@ -3370,12 +3410,12 @@ async function handleGitCommand(state: CliState, rawArgs: string): Promise<void>
 
     const diff = await getGitDiff(state.settings.workspaceRoot, stripWrappingQuotes(rest))
     printDivider()
-    process.stdout.write(`${label(diff.path)}\n`)
+    writeStdout(`${label(diff.path)}\n`)
     if (diff.unstagedDiff.trim()) {
-      process.stdout.write(`${dim('[unstaged]')}\n${diff.unstagedDiff}\n`)
+      writeStdout(`${dim('[unstaged]')}\n${diff.unstagedDiff}\n`)
     }
     if (diff.stagedDiff.trim()) {
-      process.stdout.write(`${dim('[staged]')}\n${diff.stagedDiff}\n`)
+      writeStdout(`${dim('[staged]')}\n${diff.stagedDiff}\n`)
     }
     if (!diff.unstagedDiff.trim() && !diff.stagedDiff.trim()) {
       info('No diff for that file')
@@ -3736,7 +3776,7 @@ async function handleNotebookCommand(state: CliState, rawArgs: string): Promise<
       return
     }
     for (const cell of cells) {
-      process.stdout.write(
+      writeStdout(
         `- [${cell.index}] ${cell.type}${cell.id ? ` ${dim(`#${cell.id}`)}` : ''} ${dim(`${cell.lines} line(s)`)} ${cell.preview}\n`,
       )
     }
@@ -3756,11 +3796,11 @@ async function handleNotebookCommand(state: CliState, rawArgs: string): Promise<
       state.settings.accessMode,
     )
     printDivider()
-    process.stdout.write(`${label(`Notebook Cell ${cell.index}`)} ${dim(`[${cell.type}]`)}\n`)
+    writeStdout(`${label(`Notebook Cell ${cell.index}`)} ${dim(`[${cell.type}]`)}\n`)
     if (cell.id) {
-      process.stdout.write(`${dim(`#${cell.id}`)}\n`)
+      writeStdout(`${dim(`#${cell.id}`)}\n`)
     }
-    process.stdout.write(`${cell.source}\n`)
+    writeStdout(`${cell.source}\n`)
     printDivider()
     return
   }
@@ -3831,7 +3871,7 @@ async function handleTeamsCommand(): Promise<void> {
     return
   }
   for (const team of teams) {
-    process.stdout.write(
+    writeStdout(
       `- ${team.name} ${dim(`${team.members.length} member(s)`)}` +
         `${team.description ? ` ${dim(team.description)}` : ''}\n`,
     )
@@ -3908,7 +3948,7 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
       { label: 'messages', value: String(messages.length) },
     ])
     for (const member of team.members) {
-      process.stdout.write(
+      writeStdout(
         `- ${member.name}${member.agentName ? ` ${dim(`[agent=${member.agentName}]`)}` : ''}` +
           `${member.rolePrompt ? ` ${dim(member.rolePrompt)}` : ''}\n`,
       )
@@ -4017,7 +4057,7 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
     if (subaction === 'show') {
       const memory = await getTeamMemory(teamName)
       printDivider()
-      process.stdout.write(`${label(`Team Memory ${teamName}`)}\n\n${memory?.content || dim('(empty)')}\n`)
+      writeStdout(`${label(`Team Memory ${teamName}`)}\n\n${memory?.content || dim('(empty)')}\n`)
       printDivider()
       return
     }
@@ -4063,9 +4103,9 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
     }
     const taskPrompt = tokens.join(' ')
     printDivider()
-    process.stdout.write(`${label(`Team ${team.name}`)}\n`)
+    writeStdout(`${label(`Team ${team.name}`)}\n`)
     for (const member of team.members) {
-      process.stdout.write(`${dim(`Running ${member.name}...`)}\n`)
+      writeStdout(`${dim(`Running ${member.name}...`)}\n`)
       const agent = member.agentName
         ? await getLocalAgent(member.agentName, state.settings.workspaceRoot, state.cwd)
         : null
@@ -4079,7 +4119,7 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
             }
           : { isolated: true, source: 'team' },
       )
-      process.stdout.write(`${magenta(member.name)}\n${answer || ''}\n`)
+      writeStdout(`${magenta(member.name)}\n${answer || ''}\n`)
     }
     printDivider()
     return
@@ -4118,7 +4158,7 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
       await recordTaskRunnerPid(task.id, launchTaskRunner(task.id))
       createdTasks.push({ member: member.name, id: task.id, logPath: task.logPath })
     }
-    process.stdout.write(`${JSON.stringify({ team: team.name, tasks: createdTasks }, null, 2)}\n`)
+    writeStdout(`${JSON.stringify({ team: team.name, tasks: createdTasks }, null, 2)}\n`)
     return
   }
 
@@ -4132,7 +4172,7 @@ async function handleBridgesCommand(): Promise<void> {
     return
   }
   for (const bridge of bridges) {
-    process.stdout.write(
+    writeStdout(
       `- ${bridge.name} ${dim(bridge.baseUrl)} ${bridge.enabled ? green('enabled') : red('disabled')}\n`,
     )
   }
@@ -4191,7 +4231,7 @@ async function handleBridgeCommand(state: CliState, rawArgs: string): Promise<vo
       return
     }
     const result = await pingBridge(name)
-    process.stdout.write(`${result.status} ${result.ok ? green('OK') : red('FAIL')} ${truncate(result.body, 180)}\n`)
+    writeStdout(`${result.status} ${result.ok ? green('OK') : red('FAIL')} ${truncate(result.body, 180)}\n`)
     return
   }
 
@@ -4202,7 +4242,7 @@ async function handleBridgeCommand(state: CliState, rawArgs: string): Promise<vo
       return
     }
     const result = await fetchBridgeContext(name)
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(result, null, 2)}\n`)
     return
   }
 
@@ -4219,7 +4259,7 @@ async function handleBridgeCommand(state: CliState, rawArgs: string): Promise<vo
       cwd: state.cwd,
       timeoutMs: state.settings.commandTimeoutMs,
     })
-    process.stdout.write(`${JSON.stringify(result.payload, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(result.payload, null, 2)}\n`)
     return
   }
 
@@ -4235,7 +4275,7 @@ async function handleMarketplaceCommand(rawArgs: string): Promise<void> {
       return
     }
     for (const item of items) {
-      process.stdout.write(
+      writeStdout(
         `- ${item.name} ${dim(`[${item.type}]`)} ${dim(item.source)}` +
           `${item.installedAt ? ` ${green('installed')}` : ''}\n`,
       )
@@ -4300,7 +4340,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       query,
       accessMode: state.settings.accessMode,
     })
-    process.stdout.write(`${JSON.stringify(symbols, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(symbols, null, 2)}\n`)
     return
   }
 
@@ -4318,7 +4358,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       targetPath,
       state.settings.accessMode,
     )
-    process.stdout.write(`${JSON.stringify(diagnostics, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(diagnostics, null, 2)}\n`)
     return
   }
 
@@ -4328,7 +4368,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       targetPath,
       state.settings.accessMode,
     )
-    process.stdout.write(`${JSON.stringify(symbols, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(symbols, null, 2)}\n`)
     return
   }
 
@@ -4342,7 +4382,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       column: position.column,
       accessMode: state.settings.accessMode,
     })
-    process.stdout.write(`${JSON.stringify(definitions, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(definitions, null, 2)}\n`)
     return
   }
 
@@ -4354,7 +4394,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       column: position.column,
       accessMode: state.settings.accessMode,
     })
-    process.stdout.write(`${JSON.stringify(implementations, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(implementations, null, 2)}\n`)
     return
   }
 
@@ -4366,7 +4406,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       column: position.column,
       accessMode: state.settings.accessMode,
     })
-    process.stdout.write(`${JSON.stringify(references, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(references, null, 2)}\n`)
     return
   }
 
@@ -4380,7 +4420,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       accessMode: state.settings.accessMode,
       newName,
     })
-    process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(preview, null, 2)}\n`)
     return
   }
 
@@ -4414,7 +4454,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       accessMode: state.settings.accessMode,
     })
 
-    process.stdout.write(
+    writeStdout(
       `${JSON.stringify(
         {
           canRename: true,
@@ -4438,7 +4478,7 @@ async function handleLspCommand(state: CliState, rawArgs: string): Promise<void>
       column: position.column,
       accessMode: state.settings.accessMode,
     })
-    process.stdout.write(`${JSON.stringify(hover, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(hover, null, 2)}\n`)
     return
   }
 
@@ -4453,7 +4493,7 @@ function printSessions(sessions: CliSessionRecord[], currentSessionId?: string):
 
   for (const session of sessions.slice(0, 30)) {
     const marker = session.id === currentSessionId ? green('*') : dim('-')
-    process.stdout.write(
+    writeStdout(
       `${marker} ${session.id} ${dim(session.updatedAt)} ${dim(`[${session.workspaceRoot}]`)} ${truncate(session.title, 80)}\n`,
     )
   }
@@ -4574,7 +4614,7 @@ async function buildConversationCompactSummary(
     {
       async onEvent(event) {
         if (event.type === 'status') {
-          process.stdout.write(`${dim(`[compact] ${event.message}`)}\n`)
+          writeStdout(`${dim(`[compact] ${event.message}`)}\n`)
         }
       },
     },
@@ -4639,7 +4679,7 @@ async function buildConversationSummary(
     {
       async onEvent(event) {
         if (event.type === 'status') {
-          process.stdout.write(`${dim(`[summary] ${event.message}`)}\n`)
+          writeStdout(`${dim(`[summary] ${event.message}`)}\n`)
         }
       },
     },
@@ -4700,7 +4740,7 @@ async function buildWorkspaceMemoryExtraction(
     {
       async onEvent(event) {
         if (event.type === 'status') {
-          process.stdout.write(`${dim(`[memory] ${event.message}`)}\n`)
+          writeStdout(`${dim(`[memory] ${event.message}`)}\n`)
         }
       },
     },
@@ -4788,8 +4828,8 @@ async function buildThinkbackSummary(state: CliState): Promise<ThinkbackSummary>
 
 function printThinkbackSummary(summary: ThinkbackSummary): void {
   printDivider()
-  process.stdout.write(`${label('RoyCode Thinkback')}\n`)
-  process.stdout.write(
+  writeStdout(`${label('RoyCode Thinkback')}\n`)
+  writeStdout(
     [
       `${label('sessions')} ${summary.totalSessions}`,
       `${label('last-30d')} ${summary.activeSessionsLast30Days}`,
@@ -4807,7 +4847,7 @@ function printThinkbackSummary(summary: ThinkbackSummary): void {
         }))
       : [{ label: '(none)', value: '0' }],
   )
-  process.stdout.write('\n')
+  writeStdout('\n')
 
   printKeyValueBlock(
     'Top Providers',
@@ -4818,7 +4858,7 @@ function printThinkbackSummary(summary: ThinkbackSummary): void {
         }))
       : [{ label: '(none)', value: '0' }],
   )
-  process.stdout.write('\n')
+  writeStdout('\n')
 
   printKeyValueBlock(
     'Top Models',
@@ -4829,7 +4869,7 @@ function printThinkbackSummary(summary: ThinkbackSummary): void {
         }))
       : [{ label: '(none)', value: '0' }],
   )
-  process.stdout.write('\n')
+  writeStdout('\n')
 
   printKeyValueBlock(
     'Execution Modes',
@@ -4840,7 +4880,7 @@ function printThinkbackSummary(summary: ThinkbackSummary): void {
         }))
       : [{ label: '(none)', value: '0' }],
   )
-  process.stdout.write('\n')
+  writeStdout('\n')
 
   printKeyValueBlock(
     'Recent Session Titles',
@@ -4908,9 +4948,9 @@ function printSuggestions(state: CliState): void {
     return
   }
   printDivider()
-  process.stdout.write(`${label('Prompt Suggestions')}\n`)
+  writeStdout(`${label('Prompt Suggestions')}\n`)
   state.lastSuggestions.forEach((suggestion, index) => {
-    process.stdout.write(`${index + 1}. ${suggestion}\n`)
+    writeStdout(`${index + 1}. ${suggestion}\n`)
   })
   printDivider()
 }
@@ -4931,8 +4971,8 @@ async function printRuntimeStats(state: CliState): Promise<void> {
 
   const sleepGuard = await getSleepGuardStatus()
   printDivider()
-  process.stdout.write(`${label('RoyCode Runtime Stats')}\n`)
-  process.stdout.write(
+  writeStdout(`${label('RoyCode Runtime Stats')}\n`)
+  writeStdout(
     [
       `${label('sessions')} ${sessions.length}`,
       `${label('tasks')} ${tasks.length}`,
@@ -4967,7 +5007,7 @@ async function printRuntimeStats(state: CliState): Promise<void> {
       value: String(Object.keys(getShellEnvOverrides(state.settings)).length),
     },
   ])
-  process.stdout.write('\n')
+  writeStdout('\n')
   printKeyValueBlock('Usage (30d)', [
     { label: 'runs', value: String(usage.totalRuns) },
     { label: 'success', value: String(usage.successfulRuns) },
@@ -4980,7 +5020,7 @@ async function printRuntimeStats(state: CliState): Promise<void> {
     { label: 'estimated-cost', value: formatUsd(usage.totalEstimatedCostUsd) },
   ])
   if (usage.byTool.length) {
-    process.stdout.write('\n')
+    writeStdout('\n')
     printKeyValueBlock(
       'Top Tools',
       usage.byTool.slice(0, 8).map(item => ({
@@ -4995,7 +5035,7 @@ async function printRuntimeStats(state: CliState): Promise<void> {
 async function printUsageSummary(windowDays: number): Promise<void> {
   const summary = await summarizeUsage(windowDays)
   printDivider()
-  process.stdout.write(`${label(`RoyCode Usage (${windowDays}d)`)}\n\n`)
+  writeStdout(`${label(`RoyCode Usage (${windowDays}d)`)}\n\n`)
   printKeyValueBlock('Totals', [
     { label: 'runs', value: String(summary.totalRuns) },
     { label: 'success', value: String(summary.successfulRuns) },
@@ -5007,7 +5047,7 @@ async function printUsageSummary(windowDays: number): Promise<void> {
       value: `${summary.totalInputTokens} in / ${summary.totalOutputTokens} out`,
     },
   ])
-  process.stdout.write('\n')
+  writeStdout('\n')
   printKeyValueBlock(
     'By Source',
     summary.bySource.length
@@ -5017,7 +5057,7 @@ async function printUsageSummary(windowDays: number): Promise<void> {
         }))
       : [{ label: '(none)', value: '0' }],
   )
-  process.stdout.write('\n')
+  writeStdout('\n')
   printKeyValueBlock(
     'Top Models',
     summary.byModel.length
@@ -5028,7 +5068,7 @@ async function printUsageSummary(windowDays: number): Promise<void> {
       : [{ label: '(none)', value: '0' }],
   )
   if (summary.byTool.length) {
-    process.stdout.write('\n')
+    writeStdout('\n')
     printKeyValueBlock(
       'Top Tools',
       summary.byTool.slice(0, 10).map(item => ({
@@ -5037,7 +5077,7 @@ async function printUsageSummary(windowDays: number): Promise<void> {
       })),
     )
   }
-  process.stdout.write('\n')
+  writeStdout('\n')
   printKeyValueBlock(
     'Recent Events',
     summary.recentEvents.length
@@ -5053,13 +5093,13 @@ async function printUsageSummary(windowDays: number): Promise<void> {
 async function printCostSummary(windowDays: number): Promise<void> {
   const summary = await summarizeUsage(windowDays)
   printDivider()
-  process.stdout.write(`${label(`RoyCode Cost (${windowDays}d)`)}\n\n`)
+  writeStdout(`${label(`RoyCode Cost (${windowDays}d)`)}\n\n`)
   printKeyValueBlock('Estimated Cost', [
     { label: 'input tokens', value: String(summary.totalInputTokens) },
     { label: 'output tokens', value: String(summary.totalOutputTokens) },
     { label: 'estimated usd', value: formatUsd(summary.totalEstimatedCostUsd) },
   ])
-  process.stdout.write('\n')
+  writeStdout('\n')
   printKeyValueBlock(
     'By Model',
     summary.byModel.length
@@ -5131,7 +5171,7 @@ async function printVersionInfo(state: CliState): Promise<void> {
     collectRoyCodeGitMetadata(state.settings.defaultShell),
   ])
   printDivider()
-  process.stdout.write(`${label(pkg.productName ?? 'RoyCode Studio')}\n`)
+  writeStdout(`${label(pkg.productName ?? 'RoyCode Studio')}\n`)
   printKeyValueBlock('Version', [
     { label: 'package', value: pkg.name },
     { label: 'version', value: pkg.version },
@@ -5145,7 +5185,7 @@ async function printVersionInfo(state: CliState): Promise<void> {
     { label: 'effort', value: resolveEffortLevel(state.settings) },
   ])
   if (gitMeta.isRepo) {
-    process.stdout.write('\n')
+    writeStdout('\n')
     printKeyValueBlock('Git', [
       { label: 'branch', value: gitMeta.branch ?? '(unknown)' },
       { label: 'commit', value: gitMeta.head ?? '(unknown)' },
@@ -5172,16 +5212,16 @@ async function printLocalReleaseNotes(
     },
   )
   printDivider()
-  process.stdout.write(`${label(`RoyCode Release Notes (${safeCount})`)}\n`)
+  writeStdout(`${label(`RoyCode Release Notes (${safeCount})`)}\n`)
   const lines = output
     .split(/\r?\n/)
     .map(line => line.trim())
     .filter(Boolean)
   if (!lines.length) {
-    process.stdout.write(`${dim('(no local commits found)')}\n`)
+    writeStdout(`${dim('(no local commits found)')}\n`)
   } else {
     for (const line of lines) {
-      process.stdout.write(`- ${line}\n`)
+      writeStdout(`- ${line}\n`)
     }
   }
   printDivider()
@@ -5190,9 +5230,9 @@ async function printLocalReleaseNotes(
 async function printUpgradeStatus(state: CliState): Promise<void> {
   const gitMeta = await collectRoyCodeGitMetadata(state.settings.defaultShell)
   printDivider()
-  process.stdout.write(`${label('RoyCode Upgrade Status')}\n`)
+  writeStdout(`${label('RoyCode Upgrade Status')}\n`)
   if (!gitMeta.isRepo) {
-    process.stdout.write(`${dim('This RoyCode checkout is not inside a git repository.')}\n`)
+    writeStdout(`${dim('This RoyCode checkout is not inside a git repository.')}\n`)
     printDivider()
     return
   }
@@ -5203,8 +5243,8 @@ async function printUpgradeStatus(state: CliState): Promise<void> {
     { label: 'behind', value: String(gitMeta.behind ?? 0) },
     { label: 'dirty', value: gitMeta.dirty ? 'yes' : 'no' },
   ])
-  process.stdout.write('\n')
-  process.stdout.write(
+  writeStdout('\n')
+  writeStdout(
     `${dim('Run /upgrade run to execute: git pull --ff-only, npm install, npm run install:command')}\n`,
   )
   printDivider()
@@ -5217,7 +5257,7 @@ async function runRoyCodeUpgrade(state: CliState): Promise<void> {
     'npm run install:command',
   ]
   printDivider()
-  process.stdout.write(`${label('RoyCode Upgrade')}\n`)
+  writeStdout(`${label('RoyCode Upgrade')}\n`)
   for (const step of steps) {
     info(`Running ${step}`)
     const output = await runWorkspaceCommand(
@@ -5229,7 +5269,7 @@ async function runRoyCodeUpgrade(state: CliState): Promise<void> {
       undefined,
       state.settings.defaultShell,
     )
-    process.stdout.write(`${truncate(output.trim() || '(no output)', 1200)}\n`)
+    writeStdout(`${truncate(output.trim() || '(no output)', 1200)}\n`)
   }
   ok('RoyCode self-upgrade completed')
   printDivider()
@@ -5343,7 +5383,7 @@ async function handleSummaryCommand(state: CliState, rawArgs: string): Promise<v
   }
 
   printDivider()
-  process.stdout.write(`${label('Session Summary')}\n\n${summary}\n`)
+  writeStdout(`${label('Session Summary')}\n\n${summary}\n`)
   printDivider()
 }
 
@@ -5420,7 +5460,7 @@ async function handleColorCommand(rawArgs: string): Promise<void> {
     return
   }
   if (action === 'test') {
-    process.stdout.write(
+    writeStdout(
       `${green('green')} ${yellow('yellow')} ${blue('blue')} ${magenta('magenta')} ${cyan('cyan')}\n`,
     )
     return
@@ -5602,7 +5642,7 @@ async function handleVoiceCommand(state: CliState, rawArgs: string): Promise<voi
     info(`Listening for up to ${timeout} seconds...`)
     const result = await listenForSpeech(timeout)
     printDivider()
-    process.stdout.write(`${label('Voice Input')}\n${result.text}\n`)
+    writeStdout(`${label('Voice Input')}\n${result.text}\n`)
     printDivider()
     return
   }
@@ -5780,9 +5820,9 @@ async function handleFlagsCommand(state: CliState, rawArgs: string): Promise<voi
   if (!action || action === 'list' || action === 'show' || action === 'status') {
     const flags = listFeatureFlags(state.settings)
     printDivider()
-    process.stdout.write(`${label('Feature Flags')}\n`)
+    writeStdout(`${label('Feature Flags')}\n`)
     for (const flag of flags) {
-      process.stdout.write(
+      writeStdout(
         `${flag.enabled ? green('on') : red('off')} ${flag.key} ${dim(flag.description)}\n`,
       )
     }
@@ -5830,9 +5870,9 @@ async function handlePolicyCommand(state: CliState, rawArgs: string): Promise<vo
   if (action === 'list') {
     const profiles = listPolicyProfiles()
     printDivider()
-    process.stdout.write(`${label('Policy Profiles')}\n`)
+    writeStdout(`${label('Policy Profiles')}\n`)
     for (const profile of profiles) {
-      process.stdout.write(
+      writeStdout(
         `- ${profile.key} ${dim(profile.description)} ${dim(`[access=${profile.accessMode} safe-write=${profile.safeWriteMode ? 'on' : 'off'}]`)}\n`,
       )
     }
@@ -5902,11 +5942,11 @@ function printDiagnosticEvents(events: DiagnosticEvent[]): void {
     return
   }
   for (const event of events) {
-    process.stdout.write(
+    writeStdout(
       `- [${event.kind}] ${event.name} ${dim(`[${event.status}] ${event.durationMs}ms ${event.timestamp}`)}\n`,
     )
     if (event.metadata) {
-      process.stdout.write(`  ${dim(JSON.stringify(event.metadata))}\n`)
+      writeStdout(`  ${dim(JSON.stringify(event.metadata))}\n`)
     }
   }
 }
@@ -5932,7 +5972,7 @@ async function handleDiagnosticsCommand(state: CliState, rawArgs: string): Promi
       limit: Number.isFinite(limit) ? limit : 15,
     })
     printDivider()
-    process.stdout.write(`${label('Recent Diagnostics')}\n`)
+    writeStdout(`${label('Recent Diagnostics')}\n`)
     printDiagnosticEvents(events)
     printDivider()
     return
@@ -5972,7 +6012,7 @@ async function handleTraceCommand(state: CliState, rawArgs: string): Promise<voi
       limit: Number.isFinite(limit) ? limit : 10,
     })
     printDivider()
-    process.stdout.write(`${label('Trace Events')}\n`)
+    writeStdout(`${label('Trace Events')}\n`)
     printDiagnosticEvents(events.filter(event => Boolean(event.metadata)))
     printDivider()
     return
@@ -6003,8 +6043,8 @@ async function handleDebugCommand(state: CliState, rawArgs: string): Promise<voi
     const policy = getEffectivePolicy(state.settings)
     const flags = listFeatureFlags(state.settings)
     printDivider()
-    process.stdout.write(`${label('Debug Session Snapshot')}\n`)
-    process.stdout.write(
+    writeStdout(`${label('Debug Session Snapshot')}\n`)
+    writeStdout(
       `${JSON.stringify(
         {
           sessionId: state.sessionId,
@@ -6037,8 +6077,8 @@ async function handleDebugCommand(state: CliState, rawArgs: string): Promise<voi
   if (action === 'tools') {
     const policy = getEffectivePolicy(state.settings)
     printDivider()
-    process.stdout.write(`${label('Debug Tool Policy')}\n`)
-    process.stdout.write(
+    writeStdout(`${label('Debug Tool Policy')}\n`)
+    writeStdout(
       `${JSON.stringify(
         {
           featureFlags: listFeatureFlags(state.settings),
@@ -6063,7 +6103,7 @@ async function handleDebugCommand(state: CliState, rawArgs: string): Promise<voi
       messages: [],
     })
     printDivider()
-    process.stdout.write(`${label('Debug Prompt Policy')}\n${prompt}\n`)
+    writeStdout(`${label('Debug Prompt Policy')}\n${prompt}\n`)
     printDivider()
     return
   }
@@ -6084,8 +6124,8 @@ async function handleExtraUsageCommand(rawArgs: string): Promise<void> {
   const windowDays = parseUsageWindowDays(rawArgs)
   const summary = await summarizeUsage(windowDays)
   printDivider()
-  process.stdout.write(`${label('Extra Usage')}\n`)
-  process.stdout.write(
+  writeStdout(`${label('Extra Usage')}\n`)
+  writeStdout(
     JSON.stringify(
       {
         windowDays: summary.windowDays,
@@ -6248,7 +6288,7 @@ async function handleSecurityReviewCommand(
   })
 }
 
-function renderStatusline(state: CliState): string {
+export function renderStatusline(state: CliState): string {
   const provider = getSelectedProvider(state.settings)
   const model = resolveModel(state.settings, provider)
   const parts = [
@@ -6276,8 +6316,78 @@ function renderStatusline(state: CliState): string {
   return parts.join(' | ')
 }
 
+export type CliStatusSnapshot = {
+  session: string
+  messages: string
+  attachments: string
+  workspace: string
+  dirs: string
+  access: string
+  env: string
+  policy: string
+  privacy: string
+  diagnostics: string
+  trace: string
+  effort: string
+  theme: string
+  vim: string
+  brief: string
+  voice: string
+  suggest: string
+  notify: string
+  advisor: string
+  sleepGuard: string
+  safeWrite: string
+  flags: string
+  passes: string
+  style: string
+  provider: string
+  model: string
+  cwd: string
+  mode: string
+  skills: string
+  summaries: string
+}
+
+export function getCliStatusSnapshot(state: CliState): CliStatusSnapshot {
+  const provider = getSelectedProvider(state.settings)
+  const model = resolveModel(state.settings, provider)
+  return {
+    session: state.sessionTitle,
+    messages: formatMessageCount(state.messages),
+    attachments: String(state.pendingAttachments.length),
+    workspace: state.settings.workspaceRoot,
+    dirs: String(getAdditionalWorkspaceRoots(state.settings).length),
+    access: state.settings.accessMode,
+    env: String(Object.keys(getShellEnvOverrides(state.settings)).length),
+    policy: state.settings.policyProfile ?? 'balanced',
+    privacy: state.settings.privacyMode ?? 'standard',
+    diagnostics: (state.settings.diagnosticsEnabled ?? true) ? 'on' : 'off',
+    trace: (state.settings.traceEnabled ?? false) ? 'on' : 'off',
+    effort: resolveEffortLevel(state.settings),
+    theme: state.settings.theme || 'dark',
+    vim: (state.settings.vimMode ?? false) ? 'on' : 'off',
+    brief: (state.settings.briefMode ?? false) ? 'on' : 'off',
+    voice: (state.settings.voiceMode ?? false) ? 'on' : 'off',
+    suggest: state.settings.promptSuggestionEnabled !== false ? 'on' : 'off',
+    notify: (state.settings.notificationsEnabled ?? false) ? 'on' : 'off',
+    advisor: state.settings.advisorModel || 'off',
+    sleepGuard: (state.settings.sleepGuardMode ?? false) ? 'on' : 'off',
+    safeWrite: state.settings.safeWriteMode ? 'on' : 'off',
+    flags: String(listFeatureFlags(state.settings).filter(flag => flag.enabled).length),
+    passes: String(state.settings.maxAgentSteps),
+    style: state.settings.outputStyle || DEFAULT_OUTPUT_STYLE_NAME,
+    provider: provider.name,
+    model: model || 'none',
+    cwd: state.cwd,
+    mode: describeExecutionMode(state),
+    skills: state.activeSkills.length ? state.activeSkills.join(', ') : 'none',
+    summaries: String(state.compactSummaries.length),
+  }
+}
+
 function handleStatuslineCommand(state: CliState): void {
-  process.stdout.write(`${renderStatusline(state)}\n`)
+  writeStdout(`${renderStatusline(state)}\n`)
 }
 
 function handleKeybindingsCommand(): void {
@@ -6329,7 +6439,7 @@ async function handleChromeCommand(rawArgs: string): Promise<void> {
     }
     const result = await webFetch(stripWrappingQuotes(rest))
     printDivider()
-    process.stdout.write(`${label(result.title)}\n${dim(result.url)}\n\n${result.text}\n`)
+    writeStdout(`${label(result.title)}\n${dim(result.url)}\n\n${result.text}\n`)
     printDivider()
     return
   }
@@ -6389,7 +6499,7 @@ async function handleRemoteTriggerCommand(rawArgs: string): Promise<void> {
       return
     }
     for (const trigger of triggers) {
-      process.stdout.write(
+      writeStdout(
         `- ${trigger.name} ${dim(`[${trigger.method}]`)} ${dim(trigger.url)} ${trigger.enabled ? green('enabled') : red('disabled')}\n`,
       )
     }
@@ -6453,7 +6563,7 @@ async function handleRemoteTriggerCommand(rawArgs: string): Promise<void> {
       reference,
       payload,
     })
-    process.stdout.write(
+    writeStdout(
       `${result.status} ${result.ok ? green('OK') : red('FAIL')} ${truncate(result.body.replace(/\s+/g, ' '), 180)}\n`,
     )
     return
@@ -6662,7 +6772,7 @@ async function handleCommandsCommand(state: CliState, rawArgs = ''): Promise<voi
       return
     }
     printDivider()
-    process.stdout.write(
+    writeStdout(
       `${label(localCommand.name)}\n${dim(localCommand.filePath)}\n\n${localCommand.content}\n`,
     )
     printDivider()
@@ -6694,7 +6804,7 @@ async function handleAgentsCommand(state: CliState, rawArgs: string): Promise<vo
       return
     }
     printDivider()
-    process.stdout.write(`${label(agent.name)}\n${dim(agent.filePath)}\n\n${agent.prompt}\n`)
+    writeStdout(`${label(agent.name)}\n${dim(agent.filePath)}\n\n${agent.prompt}\n`)
     if (agent.memory) {
       const memory = await readAgentMemory(
         agent.name,
@@ -6702,7 +6812,7 @@ async function handleAgentsCommand(state: CliState, rawArgs: string): Promise<vo
         state.settings.workspaceRoot,
         state.cwd,
       )
-      process.stdout.write(
+      writeStdout(
         `\n${label('Agent Memory')} ${dim(memory.path)}\n${memory.content || dim('(empty)')}\n`,
       )
     }
@@ -6746,7 +6856,7 @@ async function handleInstructionsCommand(state: CliState): Promise<void> {
 
   for (const file of files) {
     printDivider()
-    process.stdout.write(`${label(file.label)}\n${dim(file.path)}\n\n${file.content}\n`)
+    writeStdout(`${label(file.label)}\n${dim(file.path)}\n\n${file.content}\n`)
   }
   printDivider()
 }
@@ -6757,7 +6867,7 @@ async function handleMemoryCommand(state: CliState, rawArgs: string): Promise<vo
   if (!action) {
     const memory = await readWorkspaceMemory(state.settings.workspaceRoot)
     printDivider()
-    process.stdout.write(`${label(memory.label)}\n${dim(memory.path)}\n\n${memory.content}\n`)
+    writeStdout(`${label(memory.label)}\n${dim(memory.path)}\n\n${memory.content}\n`)
     printDivider()
     return
   }
@@ -6799,7 +6909,7 @@ async function handleMemoryCommand(state: CliState, rawArgs: string): Promise<vo
     }
     const memory = await appendWorkspaceMemory(state.settings.workspaceRoot, extracted)
     printDivider()
-    process.stdout.write(`${label('Extracted Workspace Memory')}\n\n${extracted}\n`)
+    writeStdout(`${label('Extracted Workspace Memory')}\n\n${extracted}\n`)
     printDivider()
     ok(`Workspace memory updated: ${memory.path}`)
     return
@@ -6856,8 +6966,8 @@ async function handleContextCommand(state: CliState): Promise<void> {
   ])
 
   printDivider()
-  process.stdout.write(`${label('Context Snapshot')}\n`)
-  process.stdout.write(
+  writeStdout(`${label('Context Snapshot')}\n`)
+  writeStdout(
     [
       `${label('workspace')} ${state.settings.workspaceRoot}`,
       `${label('extra-dirs')} ${getAdditionalWorkspaceRoots(state.settings).length}`,
@@ -6887,72 +6997,72 @@ async function handleContextCommand(state: CliState): Promise<void> {
     ].join(` ${dim('|')} `) + '\n\n',
   )
 
-  process.stdout.write(`${label('Additional Dirs')}\n`)
+  writeStdout(`${label('Additional Dirs')}\n`)
   const additionalDirs = getAdditionalWorkspaceRoots(state.settings)
   if (!additionalDirs.length) {
-    process.stdout.write(`${dim('(none)')}\n`)
+    writeStdout(`${dim('(none)')}\n`)
   } else {
     for (const dir of additionalDirs) {
-      process.stdout.write(`- ${dir}\n`)
+      writeStdout(`- ${dir}\n`)
     }
   }
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Shell Env Override Keys')}\n`)
+  writeStdout(`${label('Shell Env Override Keys')}\n`)
   const envKeys = Object.keys(getShellEnvOverrides(state.settings)).sort()
   if (!envKeys.length) {
-    process.stdout.write(`${dim('(none)')}\n`)
+    writeStdout(`${dim('(none)')}\n`)
   } else {
     for (const key of envKeys) {
-      process.stdout.write(`- ${key}\n`)
+      writeStdout(`- ${key}\n`)
     }
   }
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Effective Policy')}\n`)
-  process.stdout.write(`- profile: ${policy.profile}\n`)
-  process.stdout.write(`- description: ${policy.description}\n`)
-  process.stdout.write(`- access: ${state.settings.accessMode}\n`)
-  process.stdout.write(`- safe-write: ${state.settings.safeWriteMode ? 'on' : 'off'}\n`)
-  process.stdout.write(
+  writeStdout(`${label('Effective Policy')}\n`)
+  writeStdout(`- profile: ${policy.profile}\n`)
+  writeStdout(`- description: ${policy.description}\n`)
+  writeStdout(`- access: ${state.settings.accessMode}\n`)
+  writeStdout(`- safe-write: ${state.settings.safeWriteMode ? 'on' : 'off'}\n`)
+  writeStdout(
     `- allowlist: ${policy.allowedTools.length ? policy.allowedTools.join(', ') : '(none)'}\n`,
   )
-  process.stdout.write(
+  writeStdout(
     `- blocklist: ${policy.blockedTools.length ? policy.blockedTools.join(', ') : '(none)'}\n`,
   )
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Feature Flags')}\n`)
+  writeStdout(`${label('Feature Flags')}\n`)
   for (const flag of flags) {
-    process.stdout.write(
+    writeStdout(
       `- ${flag.key}: ${flag.enabled ? 'on' : 'off'} ${dim(flag.description)}\n`,
     )
   }
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Instructions')}\n`)
+  writeStdout(`${label('Instructions')}\n`)
   if (!instructions.length) {
-    process.stdout.write(`${dim('(none)')}\n`)
+    writeStdout(`${dim('(none)')}\n`)
   } else {
     for (const file of instructions) {
-      process.stdout.write(`- ${file.label} ${dim(file.path)}\n`)
+      writeStdout(`- ${file.label} ${dim(file.path)}\n`)
     }
   }
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Workspace Memory')}\n`)
-  process.stdout.write(`${dim(memory.path)}\n`)
-  process.stdout.write(`${truncate(memory.content.replace(/\s+/g, ' '), 220)}\n\n`)
+  writeStdout(`${label('Workspace Memory')}\n`)
+  writeStdout(`${dim(memory.path)}\n`)
+  writeStdout(`${truncate(memory.content.replace(/\s+/g, ' '), 220)}\n\n`)
 
-  process.stdout.write(`${label('Applicable Rules')}\n`)
+  writeStdout(`${label('Applicable Rules')}\n`)
   printRuleList(rules)
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Custom Output Styles')}\n`)
+  writeStdout(`${label('Custom Output Styles')}\n`)
   printOutputStyleDocs(customOutputStyles)
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Plugin Output Styles')}\n`)
+  writeStdout(`${label('Plugin Output Styles')}\n`)
   printOutputStyleDocs(
     pluginOutputStyles.map(style => ({
       name: style.name,
@@ -6962,9 +7072,9 @@ async function handleContextCommand(state: CliState): Promise<void> {
       prompt: style.prompt,
     })),
   )
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Available Output Styles')}\n`)
+  writeStdout(`${label('Available Output Styles')}\n`)
   printAvailableOutputStylesList(
     availableOutputStyles
       .filter((style): style is NonNullable<typeof style> => style !== null)
@@ -6975,40 +7085,40 @@ async function handleContextCommand(state: CliState): Promise<void> {
       })),
     selectedOutputStyle?.name ?? DEFAULT_OUTPUT_STYLE_NAME,
   )
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Project .mcp.json')}\n`)
+  writeStdout(`${label('Project .mcp.json')}\n`)
   if (!projectMcpJson.path) {
-    process.stdout.write(`${dim('(no workspace root)')}\n`)
+    writeStdout(`${dim('(no workspace root)')}\n`)
   } else {
-    process.stdout.write(
+    writeStdout(
       `${projectMcpJson.path} ${dim(`exists=${projectMcpJson.exists} valid=${projectMcpJson.valid} servers=${projectMcpJson.serverCount}`)}\n`,
     )
     if (projectMcpJson.error) {
-      process.stdout.write(`${red(projectMcpJson.error)}\n`)
+      writeStdout(`${red(projectMcpJson.error)}\n`)
     }
   }
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('GitHub Origin')}\n`)
+  writeStdout(`${label('GitHub Origin')}\n`)
   if (!githubRepo) {
-    process.stdout.write(`${dim('(not a GitHub origin)')}\n`)
+    writeStdout(`${dim('(not a GitHub origin)')}\n`)
   } else {
-    process.stdout.write(
+    writeStdout(
       `${githubRepo.owner}/${githubRepo.repo} ${dim(githubRepo.remoteUrl)}\n`,
     )
   }
-  process.stdout.write('\n')
+  writeStdout('\n')
 
-  process.stdout.write(`${label('Magic Docs')}\n`)
+  writeStdout(`${label('Magic Docs')}\n`)
   if (!docs.length) {
-    process.stdout.write(`${dim('(no markdown/text docs found)')}\n`)
+    writeStdout(`${dim('(no markdown/text docs found)')}\n`)
   } else {
     for (const docPath of docs.slice(0, 12)) {
-      process.stdout.write(`- ${docPath}\n`)
+      writeStdout(`- ${docPath}\n`)
     }
     if (docs.length > 12) {
-      process.stdout.write(`${dim(`...and ${docs.length - 12} more`)}\n`)
+      writeStdout(`${dim(`...and ${docs.length - 12} more`)}\n`)
     }
   }
   printDivider()
@@ -7168,9 +7278,9 @@ async function handleDoctorCommand(state: CliState): Promise<void> {
   })
 
   printDivider()
-  process.stdout.write(`${label('Doctor')}\n`)
+  writeStdout(`${label('Doctor')}\n`)
   for (const finding of findings) {
-    process.stdout.write(
+    writeStdout(
       `${finding.level === 'ok' ? green('OK') : yellow('WARN')} ${finding.message}\n`,
     )
   }
@@ -7207,7 +7317,7 @@ async function handleRulesCommand(state: CliState, rawArgs: string): Promise<voi
     return
   }
   printDivider()
-  process.stdout.write(`${label(rule.name)}\n${dim(rule.filePath)}\n\n${rule.content}\n`)
+  writeStdout(`${label(rule.name)}\n${dim(rule.filePath)}\n\n${rule.content}\n`)
   printDivider()
 }
 
@@ -7236,7 +7346,7 @@ async function handleOutputStyleCommand(state: CliState, rawArgs: string): Promi
       return
     }
     printDivider()
-    process.stdout.write(`${label(style.name)}\n${dim(style.source)}\n\n${style.prompt}\n`)
+    writeStdout(`${label(style.name)}\n${dim(style.source)}\n\n${style.prompt}\n`)
     printDivider()
     return
   }
@@ -7262,7 +7372,7 @@ async function handleConfigCommand(state: CliState, rawArgs: string): Promise<vo
     const entries = listSupportedConfigEntries(state.settings)
     for (const entry of entries) {
       const options = entry.options?.length ? ` ${dim(`options: ${entry.options.join(', ')}`)}` : ''
-      process.stdout.write(
+      writeStdout(
         `- ${entry.key} ${dim(`${formatJsonValue(entry.value)}`)}${options}\n`,
       )
     }
@@ -7279,7 +7389,7 @@ async function handleConfigCommand(state: CliState, rawArgs: string): Promise<vo
       fail(`Unknown config setting: ${rest}`)
       return
     }
-    process.stdout.write(
+    writeStdout(
       `${entry.key} = ${formatJsonValue(entry.value)}${entry.options?.length ? ` ${dim(`[${entry.options.join(', ')}]`)}` : ''}\n`,
     )
     return
@@ -7357,7 +7467,7 @@ async function handleConfigCommand(state: CliState, rawArgs: string): Promise<vo
   }
 
   if (directEntry) {
-    process.stdout.write(`${directEntry.key} = ${formatJsonValue(directEntry.value)}\n`)
+    writeStdout(`${directEntry.key} = ${formatJsonValue(directEntry.value)}\n`)
     return
   }
 
@@ -7386,7 +7496,7 @@ async function handleAgentMemoryCommand(state: CliState, rawArgs: string): Promi
       state.cwd,
     )
     printDivider()
-    process.stdout.write(
+    writeStdout(
       `${label(`${agentName} (${scope})`)}\n${dim(memory.path)}\n\n${memory.content || dim('(empty)')}\n`,
     )
     printDivider()
@@ -7525,7 +7635,7 @@ async function handleSkillCommand(state: CliState, rawArgs: string): Promise<voi
       return
     }
     printDivider()
-    process.stdout.write(`${label(skill.name)}\n${dim(skill.filePath)}\n\n${skill.content}\n`)
+    writeStdout(`${label(skill.name)}\n${dim(skill.filePath)}\n\n${skill.content}\n`)
     printDivider()
     return
   }
@@ -7623,7 +7733,7 @@ async function handlePluginCommand(state: CliState, rawArgs: string): Promise<vo
       return
     }
     printDivider()
-    process.stdout.write(
+    writeStdout(
       `${label(command.name)} ${dim(`[${command.kind}]`)}\n${dim(command.filePath)}\n\n${command.content}\n`,
     )
     printDivider()
@@ -7728,7 +7838,7 @@ async function handleMcpCommand(state: CliState, rawArgs: string): Promise<void>
     }
     const server = await inspectMcpServer(rest, visibleWorkspaceRoot)
     printDivider()
-    process.stdout.write(`${JSON.stringify(server, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(server, null, 2)}\n`)
     printDivider()
     return
   }
@@ -7846,7 +7956,7 @@ async function handleMcpCommand(state: CliState, rawArgs: string): Promise<void>
       return
     }
     for (const resource of resources) {
-      process.stdout.write(
+      writeStdout(
         `${resource.uri} ${dim(resource.name)} ${resource.mimeType ? dim(resource.mimeType) : ''}\n`,
       )
     }
@@ -7864,7 +7974,7 @@ async function handleMcpCommand(state: CliState, rawArgs: string): Promise<void>
     const toolArgs = parseOptionalJson(match?.[3] ?? '')
     const result = await callMcpTool(serverName, toolName, toolArgs, visibleWorkspaceRoot)
     printDivider()
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(result, null, 2)}\n`)
     printDivider()
     return
   }
@@ -7885,7 +7995,7 @@ async function handleMcpCommand(state: CliState, rawArgs: string): Promise<void>
     )
     const result = await getMcpPrompt(serverName, promptName, promptArgs, visibleWorkspaceRoot)
     printDivider()
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(result, null, 2)}\n`)
     printDivider()
     return
   }
@@ -7900,7 +8010,7 @@ async function handleMcpCommand(state: CliState, rawArgs: string): Promise<void>
     }
     const result = await readMcpResource(serverName, uri, visibleWorkspaceRoot)
     printDivider()
-    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`)
+    writeStdout(`${JSON.stringify(result, null, 2)}\n`)
     printDivider()
     return
   }
@@ -7987,11 +8097,11 @@ async function handleTaskCommand(state: CliState, rawArgs: string): Promise<void
     }
     printDivider()
     if (task.result?.trim()) {
-      process.stdout.write(`${task.result}\n`)
+      writeStdout(`${task.result}\n`)
     } else if (task.error?.trim()) {
-      process.stdout.write(`${red(task.error)}\n`)
+      writeStdout(`${red(task.error)}\n`)
     } else {
-      process.stdout.write(`${dim('(no task result yet)')}\n`)
+      writeStdout(`${dim('(no task result yet)')}\n`)
     }
     printDivider()
     return
@@ -8004,7 +8114,7 @@ async function handleTaskCommand(state: CliState, rawArgs: string): Promise<void
     }
     const output = await readTaskLog(rest)
     printDivider()
-    process.stdout.write(`${output}\n`)
+    writeStdout(`${output}\n`)
     printDivider()
     return
   }
@@ -8449,27 +8559,27 @@ async function runPromptInternal(
                 break
               }
               if (assistantLineOpen) {
-                process.stdout.write('\n')
+                writeStdout('\n')
                 assistantLineOpen = false
               }
-              process.stdout.write(`${dim(`[status] ${event.message}`)}\n`)
+              writeStdout(`${dim(`[status] ${event.message}`)}\n`)
               break
             case 'text-delta':
               if (options.quiet) {
                 break
               }
               if (!assistantLineOpen) {
-                process.stdout.write(`${cyan('assistant')} ${dim('>')} `)
+                writeStdout(`${cyan('assistant')} ${dim('>')} `)
                 assistantLineOpen = true
               }
-              process.stdout.write(event.delta)
+              writeStdout(event.delta)
               break
             case 'tool-start':
               if (options.quiet) {
                 break
               }
               if (assistantLineOpen) {
-                process.stdout.write('\n')
+                writeStdout('\n')
                 assistantLineOpen = false
               }
               if (!options.isolated) {
@@ -8482,7 +8592,7 @@ async function runPromptInternal(
                   warn(hookResult.stopReason || `Hook requested a stop before ${event.name}`)
                 }
               }
-              process.stdout.write(
+              writeStdout(
                 `${magenta('[tool]')} ${event.name} ${dim(truncate(event.input.replace(/\s+/g, ' '), 180))}\n`,
               )
               break
@@ -8491,7 +8601,7 @@ async function runPromptInternal(
                 break
               }
               if (assistantLineOpen) {
-                process.stdout.write('\n')
+                writeStdout('\n')
                 assistantLineOpen = false
               }
               if (!options.isolated) {
@@ -8504,7 +8614,7 @@ async function runPromptInternal(
                   warn(hookResult.stopReason || `Hook requested a stop after ${event.name}`)
                 }
               }
-              process.stdout.write(
+              writeStdout(
                 `${green('[done]')} ${event.name} ${dim(truncate(event.output.replace(/\s+/g, ' '), 180))}\n`,
               )
               break
@@ -8513,7 +8623,7 @@ async function runPromptInternal(
                 break
               }
               if (assistantLineOpen) {
-                process.stdout.write('\n')
+                writeStdout('\n')
                 assistantLineOpen = false
               }
               fail(event.error)
@@ -8526,7 +8636,7 @@ async function runPromptInternal(
     )
 
     if (assistantLineOpen) {
-      process.stdout.write('\n')
+      writeStdout('\n')
     }
 
     if (!options.isolated) {
@@ -8589,7 +8699,7 @@ async function runPromptInternal(
     return response.answer
   } catch (error) {
     if (assistantLineOpen) {
-      process.stdout.write('\n')
+      writeStdout('\n')
     }
     const message = error instanceof Error ? error.message : 'Unknown agent error'
     const durationMs = Date.now() - runStartedAt
@@ -9035,7 +9145,7 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
       )
       return true
     case 'clear':
-      console.clear()
+      clearOutput()
       printBanner(state)
       return true
     case 'new':
@@ -9070,7 +9180,7 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
   }
 }
 
-async function processInputLine(state: CliState, rawInput: string): Promise<boolean> {
+export async function processInputLine(state: CliState, rawInput: string): Promise<boolean> {
   const trimmed = rawInput.trim()
   if (!trimmed) {
     return true
@@ -9110,7 +9220,7 @@ async function captureMultilineInput(
   }
 }
 
-async function applyStartupOptions(
+export async function applyStartupOptions(
   state: CliState,
   options: CliOptions,
   launchDirectory: string,
@@ -9243,6 +9353,26 @@ async function applyStartupOptions(
   })
 }
 
+export async function startCliBackgroundServices(state: CliState): Promise<void> {
+  await registerCronWorkspace(state.settings.workspaceRoot)
+  await startCronScheduler([state.settings.workspaceRoot])
+  if (state.settings.sleepGuardMode) {
+    await enableSleepGuard().catch(error => {
+      warn(
+        `Sleep guard could not be enabled automatically: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      )
+    })
+  }
+}
+
+export async function shutdownCliRuntime(state: CliState): Promise<void> {
+  await runHookSafely('stop', state)
+  await saveCurrentSession(state)
+  await stopCronScheduler().catch(() => undefined)
+}
+
 function shouldExitAfterListing(options: CliOptions): boolean {
   return Boolean(
     options.listSessions &&
@@ -9282,17 +9412,7 @@ async function main(): Promise<void> {
   )
 
   await applyStartupOptions(state, options, launchDirectory)
-  await registerCronWorkspace(state.settings.workspaceRoot)
-  await startCronScheduler([state.settings.workspaceRoot])
-  if (state.settings.sleepGuardMode) {
-    await enableSleepGuard().catch(error => {
-      warn(
-        `Sleep guard could not be enabled automatically: ${
-          error instanceof Error ? error.message : 'unknown error'
-        }`,
-      )
-    })
-  }
+  await startCliBackgroundServices(state)
 
   try {
     if (options.listSessions) {
@@ -9324,9 +9444,9 @@ async function main(): Promise<void> {
       })
       if (options.printMode && answer != null) {
         if ((options.outputFormat || 'text').toLowerCase() === 'json') {
-          process.stdout.write(`${JSON.stringify({ answer }, null, 2)}\n`)
+          writeStdout(`${JSON.stringify({ answer }, null, 2)}\n`)
         } else {
-          process.stdout.write(`${answer}\n`)
+          writeStdout(`${answer}\n`)
         }
       }
       return
@@ -9351,7 +9471,7 @@ async function main(): Promise<void> {
     activeReadline = readline
 
     process.on('SIGINT', () => {
-      process.stdout.write(`\n${dim('Use /exit to quit RoyCode CLI.')}\n`)
+      writeStdout(`\n${dim('Use /exit to quit RoyCode CLI.')}\n`)
     })
 
     try {
@@ -9382,8 +9502,7 @@ async function main(): Promise<void> {
       }
     } finally {
       activeReadline = null
-      await runHookSafely('stop', state)
-      await saveCurrentSession(state)
+      await shutdownCliRuntime(state)
       readline.close()
     }
   } finally {
@@ -9391,8 +9510,23 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(error => {
-  const message = error instanceof Error ? error.message : 'Unknown CLI error'
-  fail(message)
-  process.exitCode = 1
-})
+function isDirectExecution(): boolean {
+  const entry = process.argv[1]
+  if (!entry) {
+    return false
+  }
+  try {
+    return path.resolve(entry) === fileURLToPath(import.meta.url)
+  } catch {
+    return false
+  }
+}
+
+if (isDirectExecution()) {
+  main().catch(error => {
+    const message = error instanceof Error ? error.message : 'Unknown CLI error'
+    fail(message)
+    process.exitCode = 1
+  })
+}
+

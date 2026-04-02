@@ -21,6 +21,7 @@ data/marketplace.json
 data/teams.json
 data/remote-triggers.json
 data/usage.json
+data/diagnostics.json
 data/sleep-guard.json
 **/.claude/scheduled_tasks.json
 tmp-smoke*

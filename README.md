@@ -20,7 +20,7 @@ Further reading:
 - An Electron desktop shell with a native app window, app menu, and local backend boot
 - Desktop builds now compile the backend into `dist-server/` and can produce a portable Windows executable
 - A terminal-first `RoyCode CLI` that behaves much closer to Claude Code than the WebUI does
-- The `roycode` launcher now opens an Ink-style terminal UI by default in interactive terminals, while `--plain` still gives the direct line-based CLI
+- The `roycode` launcher now defaults to the native single-process TUI, while `roycode --plain` opens the direct line-based CLI explicitly
 - RoyCode CLI now supports saved sessions, `/resume`, `/title`, `/sessions`, and one-shot `--prompt` runs
 - RoyCode CLI now supports Claude-style `-p` / `--print` runs with optional JSON output
 - RoyCode CLI includes local slash commands for files, search, shell, pending changes, Git, provider/model switching, and review/fix/plan/explain macros
@@ -273,7 +273,7 @@ npm run tui
 
 The TUI now keeps a small workspace/session panel, shortcut rail, recent input list, and a live output pane so the default `roycode` launcher feels closer to a terminal application instead of a plain line prompt.
 
-The TUI also now surfaces the current execution mode, theme preference, and vim-mode preference from `/status`, plus direct shortcuts for `/cron`, `/worktree`, and `/plan-mode status`, so it behaves more like a lightweight terminal app shell than a plain wrapper.
+The TUI also now surfaces the current execution mode, theme preference, and vim-mode preference from the shared CLI runtime state, plus direct shortcuts for `/cron`, `/worktree`, and `/plan-mode status`, so it behaves more like a lightweight terminal app shell than a thin wrapper.
 
 Global terminal command:
 

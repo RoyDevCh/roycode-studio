@@ -44,25 +44,27 @@ function shouldUseTui(argv) {
     return false
   }
 
-  const directFlags = new Set([
-    '--help',
-    '-h',
-    '--prompt',
-    '--print',
-    '-p',
-    '--web-search',
-    '--web-fetch',
-    '--list-sessions',
-    '--plain',
-    '--no-tui',
-  ])
+  const blocksTui = argv.some(flag =>
+    new Set([
+      '--help',
+      '-h',
+      '--prompt',
+      '--print',
+      '-p',
+      '--web-search',
+      '--web-fetch',
+      '--list-sessions',
+      '--plain',
+      '--no-tui',
+    ]).has(flag),
+  )
 
-  return !argv.some(flag => directFlags.has(flag))
+  return !blocksTui
 }
 
 const passthroughArgs = process.argv
   .slice(2)
-  .filter(flag => flag !== '--plain' && flag !== '--no-tui')
+  .filter(flag => flag !== '--plain' && flag !== '--no-tui' && flag !== '--tui')
 
 if (existsSync(BUILT_TUI) && shouldUseTui(process.argv.slice(2))) {
   run(process.execPath, [BUILT_TUI, ...passthroughArgs])
