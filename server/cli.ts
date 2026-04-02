@@ -2,7 +2,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline/promises'
 import { fileURLToPath } from 'node:url'
 import {
@@ -624,6 +624,38 @@ function resolveModel(settings: AppSettings, provider: ProviderConfig): string {
   return settings.selectedModel || provider.defaultModel || provider.models[0] || ''
 }
 
+function getAdditionalWorkspaceRoots(settings: AppSettings): string[] {
+  return [...new Set((settings.additionalWorkspaceRoots ?? []).map(item => path.resolve(item)))]
+}
+
+function getShellEnvOverrides(settings: AppSettings): Record<string, string> {
+  return { ...(settings.shellEnv ?? {}) }
+}
+
+function maskSecretValue(value: string): string {
+  if (!value) {
+    return '(empty)'
+  }
+  if (value.length <= 6) {
+    return '*'.repeat(value.length)
+  }
+  return `${value.slice(0, 2)}${'*'.repeat(Math.max(4, value.length - 4))}${value.slice(-2)}`
+}
+
+function resolveWorkspaceLikeInput(state: CliState, rawValue: string): string {
+  const trimmed = stripWrappingQuotes(rawValue).trim()
+  if (!trimmed) {
+    throw new Error('Path is required')
+  }
+  if (path.isAbsolute(trimmed)) {
+    return path.resolve(trimmed)
+  }
+  const base = path.isAbsolute(state.cwd)
+    ? state.cwd
+    : path.resolve(state.settings.workspaceRoot, state.cwd || '.')
+  return path.resolve(base, trimmed)
+}
+
 function findProvider(settings: AppSettings, token: string): ProviderConfig | null {
   const normalized = token.trim().toLowerCase()
   if (!normalized) {
@@ -988,6 +1020,11 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
       return ['stage', 'unstage', 'commit'].includes(firstArg)
     case 'color':
       return ['on', 'off', 'auto'].includes(firstArg)
+    case 'add-dir':
+    case 'adddir':
+      return ['clear', 'remove', 'delete'].includes(firstArg) || Boolean(rawArgs.trim())
+    case 'env':
+      return ['set', 'unset', 'remove', 'delete', 'clear'].includes(firstArg)
     default:
       return false
   }
@@ -1101,6 +1138,7 @@ function printStatus(state: CliState): void {
       `${label('messages')} ${formatMessageCount(state.messages)}`,
       `${label('attachments')} ${state.pendingAttachments.length}`,
       `${label('workspace')} ${state.settings.workspaceRoot}`,
+      `${label('dirs')} ${getAdditionalWorkspaceRoots(state.settings).length}`,
       `${label('access')} ${state.settings.accessMode}`,
       `${label('theme')} ${state.settings.theme || 'dark'}`,
       `${label('vim')} ${(state.settings.vimMode ?? false) ? green('on') : red('off')}`,
@@ -1120,6 +1158,7 @@ function printStatus(state: CliState): void {
       `${label('skills')} ${state.activeSkills.length ? state.activeSkills.join(', ') : 'none'}`,
       `${label('summaries')} ${state.compactSummaries.length}`,
       `${label('suggestions')} ${state.lastSuggestions.length}`,
+      `${label('env')} ${Object.keys(getShellEnvOverrides(state.settings)).length}`,
     ].join(` ${dim('|')} `) + '\n',
   )
 }
@@ -1232,11 +1271,15 @@ function printHelp(): void {
       '/version - print RoyCode build and runtime version details',
       '/release-notes [count] - show recent RoyCode commits from this local checkout',
       '/upgrade [status|run] - inspect or self-update this RoyCode checkout',
-      '/workspace <path> - change workspace root',
+      '/workspace [path] - show or change workspace root',
+      '/add-dir [path|remove <path>|clear] - allow extra directories while staying in workspace mode',
       '/access <workspace|unrestricted> - change filesystem mode',
       '/permissions <full|safe|workspace> - switch permission preset',
       '/safe-write <on|off> - toggle approval mode',
       '/cwd <path> - change default cwd for tool calls',
+      '/env [list|get|set|unset|clear] - inspect or manage persisted shell env overrides',
+      '/terminal-setup - print launcher, PATH, and install hints',
+      '/desktop - print local desktop launch/build entry points',
       '/attach <path> - attach a file to the next prompt',
       '/attachments - list queued attachments',
       '/files [path] [depth] - list workspace files',
@@ -1269,6 +1312,7 @@ function printHelp(): void {
       '/plugin show <name> - preview one plugin command',
       '/instructions - show auto-loaded workspace instruction files',
       '/context - inspect the currently loaded Claude-style context layers',
+      '/ctx-viz - alias for /context',
       '/doctor - run local health checks for workspace, output styles, providers, and MCP',
       '/rules - list applicable Claude-style rule documents',
       '/rules all - list every discovered Claude-style rule document',
@@ -2352,7 +2396,19 @@ async function handleModelCommand(state: CliState, rawArgs: string): Promise<voi
 async function handleWorkspaceCommand(state: CliState, rawArgs: string): Promise<void> {
   const nextRoot = stripWrappingQuotes(rawArgs)
   if (!nextRoot) {
-    fail('Usage: /workspace <path>')
+    printDivider()
+    process.stdout.write(`${label('Workspace')}\n`)
+    process.stdout.write(`${state.settings.workspaceRoot}\n`)
+    const extraDirs = getAdditionalWorkspaceRoots(state.settings)
+    process.stdout.write(`\n${label('Additional Dirs')}\n`)
+    if (!extraDirs.length) {
+      process.stdout.write(`${dim('(none)')}\n`)
+    } else {
+      for (const dir of extraDirs) {
+        process.stdout.write(`- ${dir}\n`)
+      }
+    }
+    printDivider()
     return
   }
 
@@ -2372,6 +2428,71 @@ async function handleWorkspaceCommand(state: CliState, rawArgs: string): Promise
     commandArgs: instructionFiles.map(file => file.path).join(', '),
   })
   ok(`Workspace root set to ${state.settings.workspaceRoot}`)
+}
+
+async function handleAddDirCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action || action === 'list' || action === 'show' || action === 'status') {
+    const extraDirs = getAdditionalWorkspaceRoots(state.settings)
+    printDivider()
+    process.stdout.write(`${label('Additional Workspace Directories')}\n`)
+    if (!extraDirs.length) {
+      process.stdout.write(`${dim('(none)')}\n`)
+    } else {
+      for (const dir of extraDirs) {
+        process.stdout.write(`- ${dir}\n`)
+      }
+    }
+    printDivider()
+    return
+  }
+
+  if (action === 'clear') {
+    await updateSettings(state, settings => ({
+      ...settings,
+      additionalWorkspaceRoots: [],
+    }))
+    ok('Cleared additional workspace directories')
+    return
+  }
+
+  const targetInput = action === 'remove' || action === 'delete' ? rest : rawArgs
+  let resolvedDir = ''
+  try {
+    resolvedDir = resolveWorkspaceLikeInput(state, targetInput)
+  } catch (error) {
+    fail(error instanceof Error ? error.message : 'Invalid directory path')
+    return
+  }
+
+  const targetStat = await stat(resolvedDir).catch(() => null)
+  if (!targetStat?.isDirectory()) {
+    fail(`Directory not found: ${resolvedDir}`)
+    return
+  }
+
+  const workspaceRoot = path.resolve(state.settings.workspaceRoot)
+  if (resolvedDir === workspaceRoot || resolvedDir.startsWith(`${workspaceRoot}${path.sep}`)) {
+    info('Directory is already covered by the primary workspace root')
+    return
+  }
+
+  if (action === 'remove' || action === 'delete') {
+    const nextDirs = getAdditionalWorkspaceRoots(state.settings).filter(item => item !== resolvedDir)
+    await updateSettings(state, settings => ({
+      ...settings,
+      additionalWorkspaceRoots: nextDirs,
+    }))
+    ok(`Removed additional workspace directory ${resolvedDir}`)
+    return
+  }
+
+  const nextDirs = [...getAdditionalWorkspaceRoots(state.settings), resolvedDir].sort()
+  await updateSettings(state, settings => ({
+    ...settings,
+    additionalWorkspaceRoots: [...new Set(nextDirs)],
+  }))
+  ok(`Added additional workspace directory ${resolvedDir}`)
 }
 
 async function handleAccessCommand(state: CliState, rawArgs: string): Promise<void> {
@@ -2465,6 +2586,128 @@ async function handleCwdCommand(state: CliState, rawArgs: string): Promise<void>
     commandArgs: instructionFiles.map(file => file.path).join(', '),
   })
   ok(`Default cwd set to ${nextCwd}`)
+}
+
+async function handleEnvCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  const envMap = getShellEnvOverrides(state.settings)
+
+  if (!action || action === 'list' || action === 'show' || action === 'status') {
+    printDivider()
+    process.stdout.write(`${label('Shell Env Overrides')}\n`)
+    const entries = Object.entries(envMap).sort((left, right) => left[0].localeCompare(right[0]))
+    if (!entries.length) {
+      process.stdout.write(`${dim('(none)')}\n`)
+    } else {
+      for (const [key, value] of entries) {
+        process.stdout.write(`- ${key}=${dim(maskSecretValue(value))}\n`)
+      }
+    }
+    printDivider()
+    return
+  }
+
+  if (action === 'clear') {
+    await updateSettings(state, settings => ({
+      ...settings,
+      shellEnv: {},
+    }))
+    ok('Cleared shell env overrides')
+    return
+  }
+
+  if (action === 'get') {
+    const key = rest.trim()
+    if (!key) {
+      fail('Usage: /env get <KEY>')
+      return
+    }
+    if (!(key in envMap)) {
+      warn(`No shell env override is set for ${key}`)
+      return
+    }
+    printDivider()
+    process.stdout.write(`${label(key)}\n${envMap[key]}\n`)
+    printDivider()
+    return
+  }
+
+  if (action === 'unset' || action === 'remove' || action === 'delete') {
+    const key = rest.trim()
+    if (!key) {
+      fail('Usage: /env unset <KEY>')
+      return
+    }
+    const nextEnv = { ...envMap }
+    delete nextEnv[key]
+    await updateSettings(state, settings => ({
+      ...settings,
+      shellEnv: nextEnv,
+    }))
+    ok(`Removed shell env override ${key}`)
+    return
+  }
+
+  if (action === 'set') {
+    const separatorIndex = rest.indexOf(' ')
+    const key = (separatorIndex === -1 ? rest : rest.slice(0, separatorIndex)).trim()
+    const value =
+      separatorIndex === -1 ? '' : stripWrappingQuotes(rest.slice(separatorIndex + 1).trim())
+    if (!key || !value) {
+      fail('Usage: /env set <KEY> <VALUE>')
+      return
+    }
+    await updateSettings(state, settings => ({
+      ...settings,
+      shellEnv: {
+        ...(settings.shellEnv ?? {}),
+        [key]: value,
+      },
+    }))
+    ok(`Updated shell env override ${key}`)
+    return
+  }
+
+  fail('Usage: /env [list|get|set|unset|clear]')
+}
+
+async function handleTerminalSetupCommand(): Promise<void> {
+  const appData = process.env.APPDATA
+  const globalPowerShellLauncher = appData ? path.join(appData, 'npm', 'roycode.ps1') : '(unknown)'
+  const globalCmdLauncher = appData ? path.join(appData, 'npm', 'roycode.cmd') : '(unknown)'
+  printDivider()
+  process.stdout.write(`${label('Terminal Setup')}\n`)
+  process.stdout.write(
+    [
+      `- app root: ${APP_ROOT}`,
+      `- CLI from source: npm run cli`,
+      `- TUI from source: npm run tui`,
+      `- install global launcher: npm run install:command`,
+      `- PowerShell launcher: ${globalPowerShellLauncher}`,
+      `- CMD launcher: ${globalCmdLauncher}`,
+      `- current shell: ${process.env.ComSpec || process.env.SHELL || '(unknown)'}`,
+    ].join('\n') + '\n',
+  )
+  printDivider()
+}
+
+async function handleDesktopInfoCommand(): Promise<void> {
+  const portableExe = path.join(APP_ROOT, 'release', 'RoyCode Studio 0.1.0.exe')
+  const unpackedExe = path.join(APP_ROOT, 'release', 'win-unpacked', 'RoyCode Studio.exe')
+  const portableExists = await stat(portableExe).then(() => true).catch(() => false)
+  const unpackedExists = await stat(unpackedExe).then(() => true).catch(() => false)
+
+  printDivider()
+  process.stdout.write(`${label('Desktop Entry Points')}\n`)
+  process.stdout.write(
+    [
+      `- source launch: npm run desktop`,
+      `- packaged build: npm run desktop:dist`,
+      `- portable exe: ${portableExe} ${dim(`exists=${portableExists}`)}`,
+      `- unpacked exe: ${unpackedExe} ${dim(`exists=${unpackedExists}`)}`,
+    ].join('\n') + '\n',
+  )
+  printDivider()
 }
 
 async function handleAttachCommand(state: CliState, rawArgs: string): Promise<void> {
@@ -4284,6 +4527,10 @@ async function printRuntimeStats(state: CliState): Promise<void> {
   )
   printKeyValueBlock('Current Runtime', [
     { label: 'workspace', value: state.settings.workspaceRoot },
+    {
+      label: 'extra-dirs',
+      value: String(getAdditionalWorkspaceRoots(state.settings).length),
+    },
     { label: 'cwd', value: state.cwd },
     { label: 'mode', value: describeExecutionMode(state) },
     { label: 'effort', value: resolveEffortLevel(state.settings) },
@@ -4295,6 +4542,10 @@ async function printRuntimeStats(state: CliState): Promise<void> {
     {
       label: 'suggestions',
       value: state.settings.promptSuggestionEnabled === false ? 'off' : 'on',
+    },
+    {
+      label: 'shell-env',
+      value: String(Object.keys(getShellEnvOverrides(state.settings)).length),
     },
   ])
   process.stdout.write('\n')
@@ -4469,7 +4720,9 @@ async function printVersionInfo(state: CliState): Promise<void> {
     { label: 'platform', value: `${process.platform}/${process.arch}` },
     { label: 'app-root', value: APP_ROOT },
     { label: 'workspace', value: state.settings.workspaceRoot },
+    { label: 'extra-dirs', value: String(getAdditionalWorkspaceRoots(state.settings).length) },
     { label: 'shell', value: state.settings.defaultShell ?? 'powershell' },
+    { label: 'shell-env', value: String(Object.keys(getShellEnvOverrides(state.settings)).length) },
     { label: 'effort', value: resolveEffortLevel(state.settings) },
   ])
   if (gitMeta.isRepo) {
@@ -5223,6 +5476,7 @@ function renderStatusline(state: CliState): string {
   const parts = [
     `session ${state.sessionTitle}`,
     `workspace ${state.settings.workspaceRoot}`,
+    `dirs ${getAdditionalWorkspaceRoots(state.settings).length}`,
     `cwd ${state.cwd}`,
     `provider ${provider.id}`,
     `model ${model || 'none'}`,
@@ -5233,6 +5487,7 @@ function renderStatusline(state: CliState): string {
     `suggest ${state.settings.promptSuggestionEnabled !== false ? 'on' : 'off'}`,
     `notify ${(state.settings.notificationsEnabled ?? false) ? 'on' : 'off'}`,
     `safe-write ${state.settings.safeWriteMode ? 'on' : 'off'}`,
+    `env ${Object.keys(getShellEnvOverrides(state.settings)).length}`,
   ]
   return parts.join(' | ')
 }
@@ -5815,6 +6070,7 @@ async function handleContextCommand(state: CliState): Promise<void> {
   process.stdout.write(
     [
       `${label('workspace')} ${state.settings.workspaceRoot}`,
+      `${label('extra-dirs')} ${getAdditionalWorkspaceRoots(state.settings).length}`,
       `${label('cwd')} ${state.cwd}`,
       `${label('access')} ${state.settings.accessMode}`,
       `${label('safe-write')} ${state.settings.safeWriteMode ? 'on' : 'off'}`,
@@ -5830,8 +6086,31 @@ async function handleContextCommand(state: CliState): Promise<void> {
       `${label('plugins')} ${plugins.length}`,
       `${label('plugin-commands')} ${pluginCommands.length}`,
       `${label('mcp')} ${mcpServers.length}`,
+      `${label('shell-env')} ${Object.keys(getShellEnvOverrides(state.settings)).length}`,
     ].join(` ${dim('|')} `) + '\n\n',
   )
+
+  process.stdout.write(`${label('Additional Dirs')}\n`)
+  const additionalDirs = getAdditionalWorkspaceRoots(state.settings)
+  if (!additionalDirs.length) {
+    process.stdout.write(`${dim('(none)')}\n`)
+  } else {
+    for (const dir of additionalDirs) {
+      process.stdout.write(`- ${dir}\n`)
+    }
+  }
+  process.stdout.write('\n')
+
+  process.stdout.write(`${label('Shell Env Override Keys')}\n`)
+  const envKeys = Object.keys(getShellEnvOverrides(state.settings)).sort()
+  if (!envKeys.length) {
+    process.stdout.write(`${dim('(none)')}\n`)
+  } else {
+    for (const key of envKeys) {
+      process.stdout.write(`- ${key}\n`)
+    }
+  }
+  process.stdout.write('\n')
 
   process.stdout.write(`${label('Instructions')}\n`)
   if (!instructions.length) {
@@ -5909,6 +6188,18 @@ async function handleDoctorCommand(state: CliState): Promise<void> {
     })
   }
 
+  for (const dir of getAdditionalWorkspaceRoots(state.settings)) {
+    try {
+      await buildFileTree(state.settings.workspaceRoot, dir, 0, state.settings.accessMode)
+      findings.push({ level: 'ok', message: `Additional directory is accessible: ${dir}` })
+    } catch (error) {
+      findings.push({
+        level: 'warn',
+        message: `Additional directory is not accessible: ${dir} (${error instanceof Error ? error.message : 'unknown error'})`,
+      })
+    }
+  }
+
   if (provider.apiKey) {
     findings.push({ level: 'ok', message: `Provider ${provider.id} has an API key configured` })
   } else {
@@ -5977,6 +6268,11 @@ async function handleDoctorCommand(state: CliState): Promise<void> {
   findings.push({
     level: 'ok',
     message: `${mcpServers.length} MCP server(s) visible under current settings`,
+  })
+
+  findings.push({
+    level: 'ok',
+    message: `${Object.keys(getShellEnvOverrides(state.settings)).length} persisted shell env override(s) configured`,
   })
 
   printDivider()
@@ -7160,6 +7456,16 @@ async function runPromptInternal(
           'RoyCode brief mode is enabled. Keep answers concise, high-signal, and compact unless the user explicitly asks for depth.',
         ]
       : []),
+    ...(getAdditionalWorkspaceRoots(state.settings).length
+      ? [
+          `Additional allowed directories while still in workspace mode: ${getAdditionalWorkspaceRoots(state.settings).join(', ')}`,
+        ]
+      : []),
+    ...(Object.keys(getShellEnvOverrides(state.settings)).length
+      ? [
+          `Persisted shell environment override keys available to shell tools: ${Object.keys(getShellEnvOverrides(state.settings)).sort().join(', ')}`,
+        ]
+      : []),
     ...buildEffortSystemAddenda(state.settings),
     ...modeAddenda.extraSystemAddenda,
     ...(compactSystemMessage ? [compactSystemMessage] : []),
@@ -7489,6 +7795,10 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'workspace':
       await handleWorkspaceCommand(state, command.rawArgs)
       return true
+    case 'add-dir':
+    case 'adddir':
+      await handleAddDirCommand(state, command.rawArgs)
+      return true
     case 'access':
       await handleAccessCommand(state, command.rawArgs)
       return true
@@ -7501,6 +7811,16 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
       return true
     case 'cwd':
       await handleCwdCommand(state, command.rawArgs)
+      return true
+    case 'env':
+      await handleEnvCommand(state, command.rawArgs)
+      return true
+    case 'terminal-setup':
+    case 'terminalsetup':
+      await handleTerminalSetupCommand()
+      return true
+    case 'desktop':
+      await handleDesktopInfoCommand()
       return true
     case 'attach':
       await handleAttachCommand(state, command.rawArgs)
@@ -7559,6 +7879,8 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
       await handleInstructionsCommand(state)
       return true
     case 'context':
+    case 'ctx-viz':
+    case 'ctxviz':
       await handleContextCommand(state)
       return true
     case 'doctor':

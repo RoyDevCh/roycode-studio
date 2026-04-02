@@ -20,6 +20,66 @@ function stripBom(value: string): string {
   return value.replace(/^\uFEFF/, '')
 }
 
+function readAdditionalWorkspaceRootsFromEnv(): string[] {
+  try {
+    const raw = process.env.ROYCODE_ADDITIONAL_WORKSPACE_ROOTS
+    if (!raw?.trim()) {
+      return []
+    }
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) {
+      return []
+    }
+    return parsed
+      .map(item => String(item).trim())
+      .filter(Boolean)
+      .map(item => path.resolve(item))
+  } catch {
+    return []
+  }
+}
+
+function readShellEnvOverridesFromEnv(): Record<string, string> {
+  try {
+    const raw = process.env.ROYCODE_SHELL_ENV_OVERRIDES
+    if (!raw?.trim()) {
+      return {}
+    }
+    const parsed = JSON.parse(raw) as unknown
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return {}
+    }
+    return Object.fromEntries(
+      Object.entries(parsed).flatMap(([key, value]) => {
+        const normalizedKey = String(key).trim()
+        if (!normalizedKey) {
+          return []
+        }
+        return [[normalizedKey, String(value ?? '')]]
+      }),
+    )
+  } catch {
+    return {}
+  }
+}
+
+function getAllowedWorkspaceRoots(workspaceRoot: string): string[] {
+  return [path.resolve(workspaceRoot), ...readAdditionalWorkspaceRootsFromEnv()].filter(
+    (value, index, array) => array.indexOf(value) === index,
+  )
+}
+
+function isWithinAllowedRoot(resolvedPath: string, allowedRoots: string[]): boolean {
+  return allowedRoots.some(root => resolvedPath === root || resolvedPath.startsWith(`${root}${path.sep}`))
+}
+
+function findContainingWorkspaceRoot(resolvedPath: string, allowedRoots: string[]): string | null {
+  const matches = allowedRoots
+    .filter(root => resolvedPath === root || resolvedPath.startsWith(`${root}${path.sep}`))
+    .sort((left, right) => right.length - left.length)
+  return matches[0] ?? null
+}
+
 export function resolveWorkspacePath(
   workspaceRoot: string,
   requestedPath = '.',
@@ -37,11 +97,7 @@ export function resolveWorkspacePath(
     return resolved
   }
 
-  const normalizedRoot = path.resolve(workspaceRoot)
-  if (
-    resolved !== normalizedRoot &&
-    !resolved.startsWith(`${normalizedRoot}${path.sep}`)
-  ) {
+  if (!isWithinAllowedRoot(resolved, getAllowedWorkspaceRoots(workspaceRoot))) {
     throw new Error('Path escapes the configured workspace root')
   }
   return resolved
@@ -56,7 +112,15 @@ export function toWorkspaceRelative(
     return path.resolve(absolutePath).split(path.sep).join('/')
   }
 
-  const relative = path.relative(workspaceRoot, absolutePath)
+  const resolvedPath = path.resolve(absolutePath)
+  const ownerRoot =
+    findContainingWorkspaceRoot(resolvedPath, getAllowedWorkspaceRoots(workspaceRoot)) ??
+    path.resolve(workspaceRoot)
+  if (ownerRoot !== path.resolve(workspaceRoot)) {
+    return resolvedPath.split(path.sep).join('/')
+  }
+
+  const relative = path.relative(workspaceRoot, resolvedPath)
   return relative === '' ? '.' : relative.split(path.sep).join('/')
 }
 
@@ -296,6 +360,7 @@ export async function runWorkspaceCommand(
       cwd: resolvedCwd,
       env: {
         ...process.env,
+        ...readShellEnvOverridesFromEnv(),
         ...envOverrides,
       },
       stdio: ['pipe', 'pipe', 'pipe'],

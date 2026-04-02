@@ -60,6 +60,8 @@ Further reading:
 - RoyCode CLI now supports local prompt suggestions, usage/cost statistics, advisor-model second opinions, and reasoning effort presets
 - RoyCode CLI now supports local `version`, `release-notes`, and `upgrade status/run` flows for inspecting and refreshing the installed checkout
 - RoyCode CLI now supports a dedicated `security-review` workflow for focused risk and regression auditing
+- RoyCode CLI now supports `add-dir` style extra workspace directories, so workspace mode can safely cover more than one root without switching to unrestricted access
+- RoyCode CLI now supports persisted shell environment overrides through `/env`, and these overrides flow into local shell tools across CLI, agent runs, and Web/Desktop backend commands
 - RoyCode CLI now supports local notifications and a sleep-guard toggle for long-running workflows
 - RoyCode voice support now includes local Windows speech-to-text capture for dictated prompts
 - RoyCode CLI now supports Claude-style session helper commands such as `/session`, `/statusline`, and `/keybindings`
@@ -72,6 +74,7 @@ Further reading:
 - RoyCode now includes a simple local text-to-speech voice helper on Windows when voice mode is enabled
 - RoyCode now also includes local runtime statistics, usage logging, cost estimation summaries, and top-tool usage buckets
 - RoyCode MCP management now supports server inspection plus persisted header, bearer-token, and environment-variable edits for saved servers
+- RoyCode CLI now includes local `ctx-viz`, `terminal-setup`, and `desktop` helper commands for inspecting loaded context and local launch/install entry points
 - RoyCode hooks now accept JSON stdin and structured JSON stdout so hooks can emit `systemMessage`, block execution, attach extra context, mutate prompt input, and filter by matcher text or regex more like Claude Code hooks
 - Sidebar project rail for quick workspace switching, with a chat list that behaves more like a project tree + session tree
 - Project rail now supports search, favorites, and recent-project grouping

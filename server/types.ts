@@ -42,6 +42,7 @@ export type TodoItem = {
 export type AppSettings = {
   appName: string
   workspaceRoot: string
+  additionalWorkspaceRoots?: string[]
   accessMode: AccessMode
   theme?: 'dark' | 'light' | 'auto'
   vimMode?: boolean
@@ -55,6 +56,7 @@ export type AppSettings = {
   outputStyle?: string
   cleanupPeriodDays?: number
   defaultShell?: 'powershell' | 'bash'
+  shellEnv?: Record<string, string>
   enableAllProjectMcpServers?: boolean
   selectedProviderId?: string
   selectedModel?: string
@@ -65,8 +67,9 @@ export type AppSettings = {
   providers: ProviderConfig[]
 }
 
-export type PublicSettings = Omit<AppSettings, 'providers'> & {
+export type PublicSettings = Omit<AppSettings, 'providers' | 'shellEnv'> & {
   providers: ProviderPublic[]
+  shellEnvKeys: string[]
 }
 
 export type FileNode = {

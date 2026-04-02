@@ -38,6 +38,16 @@ function buildToolPolicy(settings: AppSettings): string {
     settings.accessMode === 'unrestricted'
       ? '- Filesystem access is unrestricted within the current OS account. Absolute paths may be used when needed.'
       : '- Filesystem access is limited to the configured workspace root.',
+    ...(settings.additionalWorkspaceRoots?.length
+      ? [
+          `- Additional allowed directories are configured: ${settings.additionalWorkspaceRoots.join(', ')}.`,
+        ]
+      : []),
+    ...(Object.keys(settings.shellEnv ?? {}).length
+      ? [
+          `- Persisted shell environment override keys are available to shell tools: ${Object.keys(settings.shellEnv ?? {}).sort().join(', ')}.`,
+        ]
+      : []),
   ].join('\n')
 }
 
@@ -62,10 +72,20 @@ function buildSkillPolicy(): string {
 function buildWorkspaceInfo(settings: AppSettings, request: ChatRequest): string {
   return [
     `Workspace root: ${settings.workspaceRoot}`,
+    `Additional workspace dirs: ${
+      settings.additionalWorkspaceRoots?.length
+        ? settings.additionalWorkspaceRoots.join(', ')
+        : '(none)'
+    }`,
     `Filesystem access mode: ${settings.accessMode}`,
     `Preferred cwd: ${request.cwd ?? '.'}`,
     `Model: ${request.model}`,
     `Output style: ${settings.outputStyle || 'default'}`,
+    `Shell env override keys: ${
+      Object.keys(settings.shellEnv ?? {}).length
+        ? Object.keys(settings.shellEnv ?? {}).sort().join(', ')
+        : '(none)'
+    }`,
   ].join('\n')
 }
 

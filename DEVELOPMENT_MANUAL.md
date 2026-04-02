@@ -253,6 +253,8 @@ Responsibilities:
 - file reads/writes
 - shell command execution
 - path safety and access mode enforcement
+- extra workspace directory allowlists
+- persisted shell environment override injection
 
 ### `server/pendingChanges.ts`
 
@@ -479,6 +481,8 @@ RoyCode stores CLI-oriented runtime flags in the same persisted settings layer a
 Current examples:
 
 - `effortLevel`
+- `additionalWorkspaceRoots`
+- `shellEnv`
 - `promptSuggestionEnabled`
 - `notificationsEnabled`
 - `sleepGuardMode`
@@ -603,6 +607,7 @@ The CLI emits lightweight machine-readable status markers that the TUI parses in
 Current surfaced fields include:
 
 - workspace root
+- additional workspace dir count
 - cwd
 - provider/model
 - access mode
@@ -611,6 +616,7 @@ Current surfaced fields include:
 - theme
 - vim mode
 - effort level
+- shell env override count
 
 If you add a new surfaced field:
 

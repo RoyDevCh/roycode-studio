@@ -27,6 +27,7 @@ function getDefaultSettings(): AppSettings {
   return {
     appName: 'RoyCode Studio',
     workspaceRoot: DEFAULT_WORKSPACE_ROOT,
+    additionalWorkspaceRoots: [],
     accessMode: 'workspace',
     theme: 'dark',
     vimMode: false,
@@ -40,6 +41,7 @@ function getDefaultSettings(): AppSettings {
     outputStyle: 'default',
     cleanupPeriodDays: 30,
     defaultShell: 'powershell',
+    shellEnv: {},
     enableAllProjectMcpServers: true,
     selectedProviderId: deepseek.id,
     selectedModel: deepseek.defaultModel,
@@ -56,6 +58,10 @@ function applySettingsToRuntime(settings: AppSettings): AppSettings {
   process.env.ROYCODE_DEFAULT_SHELL = settings.defaultShell ?? 'powershell'
   process.env.ROYCODE_ENABLE_ALL_PROJECT_MCP_SERVERS =
     settings.enableAllProjectMcpServers === false ? 'false' : 'true'
+  process.env.ROYCODE_ADDITIONAL_WORKSPACE_ROOTS = JSON.stringify(
+    (settings.additionalWorkspaceRoots ?? []).map(item => path.resolve(item)),
+  )
+  process.env.ROYCODE_SHELL_ENV_OVERRIDES = JSON.stringify(settings.shellEnv ?? {})
   return settings
 }
 
@@ -65,6 +71,12 @@ function normalizeSettings(raw: Partial<AppSettings>): AppSettings {
     ...defaults,
     ...raw,
     providers: raw.providers ?? defaults.providers,
+    additionalWorkspaceRoots: Array.isArray(raw.additionalWorkspaceRoots)
+      ? raw.additionalWorkspaceRoots
+          .map(item => String(item).trim())
+          .filter(Boolean)
+          .map(item => path.resolve(item))
+      : defaults.additionalWorkspaceRoots,
     accessMode: raw.accessMode ?? defaults.accessMode,
     theme:
       raw.theme === 'light' || raw.theme === 'dark' || raw.theme === 'auto'
@@ -109,6 +121,18 @@ function normalizeSettings(raw: Partial<AppSettings>): AppSettings {
       raw.defaultShell === 'bash' || raw.defaultShell === 'powershell'
         ? raw.defaultShell
         : defaults.defaultShell,
+    shellEnv:
+      raw.shellEnv && typeof raw.shellEnv === 'object' && !Array.isArray(raw.shellEnv)
+        ? Object.fromEntries(
+            Object.entries(raw.shellEnv).flatMap(([key, value]) => {
+              const normalizedKey = String(key).trim()
+              if (!normalizedKey) {
+                return []
+              }
+              return [[normalizedKey, String(value ?? '')]]
+            }),
+          )
+        : defaults.shellEnv,
     enableAllProjectMcpServers:
       typeof raw.enableAllProjectMcpServers === 'boolean'
         ? raw.enableAllProjectMcpServers
@@ -156,8 +180,10 @@ export function toPublicProvider(provider: ProviderConfig): ProviderPublic {
 }
 
 export function toPublicSettings(settings: AppSettings): PublicSettings {
+  const { shellEnv: _shellEnv, ...rest } = settings
   return {
-    ...settings,
+    ...rest,
     providers: settings.providers.map(toPublicProvider),
+    shellEnvKeys: Object.keys(settings.shellEnv ?? {}).sort(),
   }
 }

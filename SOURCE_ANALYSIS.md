@@ -129,6 +129,7 @@ What this means:
 - The original system already treats "model choice" as a capability/configuration problem, not just a single hardcoded API endpoint.
 - This supports the path of making a multi-provider local tool with DeepSeek, MiniMax, and compatible OpenAI-style backends.
 - RoyCode now also carries a local `effortLevel` runtime setting so prompt policy and step-budget shaping can vary without hardcoding one reasoning depth.
+- RoyCode now also supports extra workspace directory allowlists and persisted shell environment overrides, which are both useful local approximations of the snapshot's richer workspace/terminal runtime.
 
 ## 10. Web and Current-Info Capabilities
 
@@ -206,6 +207,7 @@ What can be rebuilt locally:
 - slash commands and structured tools
 - Claude-style `-p/--print` execution plus project/user `.claude/skills`, `.claude/commands`, `.claude/rules`, `.claude/output-styles`, and agent-memory compatibility
 - install/runtime inspection commands such as local `version`, `release-notes`, and `upgrade status/run`
+- extra working-directory and shell-environment controls that keep local terminal flows flexible without forcing fully unrestricted mode
 - Claude-style project/user `.claude/agents` compatibility and current-directory nested `.claude` discovery
 - resumable sessions
 - layered prompt composition

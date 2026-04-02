@@ -81,6 +81,20 @@ const CONFIG_HANDLERS: ConfigHandler[] = [
     set: (settings, value) => ({ ...settings, workspaceRoot: String(value).trim() || settings.workspaceRoot }),
   },
   {
+    key: 'additionalWorkspaceRoots',
+    description: 'Extra directories allowed while still in workspace access mode.',
+    type: 'string',
+    aliases: ['workspace.additionalRoots', 'workspace.additionalDirs'],
+    get: settings => (settings.additionalWorkspaceRoots ?? []).join(', '),
+    set: (settings, value) => ({
+      ...settings,
+      additionalWorkspaceRoots: String(value)
+        .split(/[\n,;]/)
+        .map(item => item.trim())
+        .filter(Boolean),
+    }),
+  },
+  {
     key: 'accessMode',
     description: 'Filesystem access mode: workspace or unrestricted.',
     type: 'enum',
@@ -255,6 +269,14 @@ const CONFIG_HANDLERS: ConfigHandler[] = [
       }
       return { ...settings, defaultShell: normalized }
     },
+  },
+  {
+    key: 'shellEnvKeys',
+    description: 'Read-only list of persisted shell environment override keys.',
+    type: 'string',
+    aliases: ['shell.envKeys'],
+    get: settings => Object.keys(settings.shellEnv ?? {}).sort().join(', '),
+    set: settings => settings,
   },
   {
     key: 'enableAllProjectMcpServers',

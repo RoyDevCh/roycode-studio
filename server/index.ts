@@ -98,6 +98,7 @@ const providerPayloadSchema = z.object({
 const settingsPayloadSchema = z.object({
   appName: z.string().min(1).optional(),
   workspaceRoot: z.string().min(1).optional(),
+  additionalWorkspaceRoots: z.array(z.string().min(1)).optional(),
   accessMode: z.enum(['workspace', 'unrestricted']).optional(),
   theme: z.enum(['dark', 'light', 'auto']).optional(),
   vimMode: z.boolean().optional(),
@@ -111,6 +112,7 @@ const settingsPayloadSchema = z.object({
   outputStyle: z.string().min(1).optional(),
   cleanupPeriodDays: z.number().int().min(1).max(3650).optional(),
   defaultShell: z.enum(['powershell', 'bash']).optional(),
+  shellEnv: z.record(z.string(), z.string()).optional(),
   enableAllProjectMcpServers: z.boolean().optional(),
   selectedProviderId: z.string().optional(),
   selectedModel: z.string().optional(),

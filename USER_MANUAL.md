@@ -132,7 +132,10 @@ CLI commands:
 /permissions full
 /safe-write on
 /safe-write off
+/add-dir <path>
 ```
+
+`/add-dir` lets you keep `workspace` mode while allowing extra absolute directories. This is the closest local analogue to the source snapshot's extra working-directory flow.
 
 ## 6. Core Prompt Workflow
 
@@ -193,10 +196,16 @@ When prompt suggestions are enabled:
 /read <path>
 /search <query>
 /run <command>
+/env
+/env set <KEY> <VALUE>
+/env get <KEY>
+/env unset <KEY>
 /cwd <path>
 /attach <path>
 /attachments
 ```
+
+`/env` stores shell environment overrides in local settings. RoyCode injects them into shell commands and shell-backed agent tools.
 
 ## 9. Web Search and Browser Helpers
 
@@ -388,6 +397,7 @@ Team memory writes now run a high-confidence secret scan before saving. If RoyCo
 
 ```bash
 /context
+/ctx-viz
 /doctor
 /instructions
 /memory
@@ -405,6 +415,8 @@ Team memory writes now run a high-confidence secret scan before saving. If RoyCo
 /agent-memory set <agent> <scope> <text>
 /todos
 ```
+
+`/ctx-viz` is a direct alias for `/context`.
 
 ## 16. Usage, Cost, and Advisor
 
@@ -481,6 +493,8 @@ Sleep guard is a local Windows helper that keeps the machine awake during long-r
 /upgrade status
 /upgrade run
 /color [auto|on|off|test]
+/terminal-setup
+/desktop
 ```
 
 Use these commands when you want to inspect the installed build, read recent local repo changes, or refresh the checkout in place. `/upgrade run` pulls the current branch, refreshes npm dependencies, and re-installs the global `roycode` launcher.
