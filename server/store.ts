@@ -32,6 +32,7 @@ function getDefaultSettings(): AppSettings {
     vimMode: false,
     briefMode: false,
     voiceMode: false,
+    effortLevel: 'auto',
     promptSuggestionEnabled: true,
     notificationsEnabled: false,
     sleepGuardMode: false,
@@ -74,6 +75,14 @@ function normalizeSettings(raw: Partial<AppSettings>): AppSettings {
       typeof raw.briefMode === 'boolean' ? raw.briefMode : defaults.briefMode,
     voiceMode:
       typeof raw.voiceMode === 'boolean' ? raw.voiceMode : defaults.voiceMode,
+    effortLevel:
+      raw.effortLevel === 'low' ||
+      raw.effortLevel === 'medium' ||
+      raw.effortLevel === 'high' ||
+      raw.effortLevel === 'max' ||
+      raw.effortLevel === 'auto'
+        ? raw.effortLevel
+        : defaults.effortLevel,
     promptSuggestionEnabled:
       typeof raw.promptSuggestionEnabled === 'boolean'
         ? raw.promptSuggestionEnabled

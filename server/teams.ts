@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { describeSecretMatches, scanTextForSecrets, type SecretMatch } from './secretScanner.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -38,6 +39,11 @@ export type LocalTeamMemory = {
   teamName: string
   content: string
   updatedAt: string
+}
+
+export type TeamMemoryScanResult = {
+  teamName: string
+  matches: SecretMatch[]
 }
 
 type TeamStore = {
@@ -86,6 +92,15 @@ async function readStore(): Promise<TeamStore> {
 async function writeStore(store: TeamStore): Promise<void> {
   await ensureStore()
   await writeFile(TEAMS_PATH, JSON.stringify(store, null, 2), 'utf8')
+}
+
+function assertSafeTeamMemory(content: string, force = false): void {
+  const matches = scanTextForSecrets(content)
+  if (matches.length && !force) {
+    throw new Error(
+      `Team memory contains likely secrets: ${describeSecretMatches(matches)}. Re-run with force if you really want to store it.`,
+    )
+  }
 }
 
 export async function listTeams(): Promise<LocalTeam[]> {
@@ -283,12 +298,16 @@ export async function getTeamMemory(reference: string): Promise<LocalTeamMemory 
 export async function setTeamMemory(
   reference: string,
   content: string,
+  options: {
+    force?: boolean
+  } = {},
 ): Promise<LocalTeamMemory> {
   const store = await readStore()
   const team = await getTeam(reference)
   if (!team) {
     throw new Error(`Team not found: ${reference}`)
   }
+  assertSafeTeamMemory(content.trim(), options.force === true)
   const next: LocalTeamMemory = {
     teamName: team.name,
     content: content.trim(),
@@ -307,15 +326,20 @@ export async function setTeamMemory(
 export async function appendTeamMemory(
   reference: string,
   content: string,
+  options: {
+    force?: boolean
+  } = {},
 ): Promise<LocalTeamMemory> {
   const current = await getTeamMemory(reference)
-  return setTeamMemory(
-    reference,
-    [current?.content?.trim(), content.trim()].filter(Boolean).join('\n\n'),
-  )
+  return setTeamMemory(reference, [current?.content?.trim(), content.trim()].filter(Boolean).join('\n\n'), options)
 }
 
-export async function syncTeamMemoryFromMessages(reference: string): Promise<LocalTeamMemory> {
+export async function syncTeamMemoryFromMessages(
+  reference: string,
+  options: {
+    force?: boolean
+  } = {},
+): Promise<LocalTeamMemory> {
   const team = await getTeam(reference)
   if (!team) {
     throw new Error(`Team not found: ${reference}`)
@@ -333,5 +357,17 @@ export async function syncTeamMemoryFromMessages(reference: string): Promise<Loc
   ]
     .filter(Boolean)
     .join('\n')
-  return setTeamMemory(team.name, summary)
+  return setTeamMemory(team.name, summary, options)
+}
+
+export async function scanTeamMemory(reference: string): Promise<TeamMemoryScanResult> {
+  const team = await getTeam(reference)
+  if (!team) {
+    throw new Error(`Team not found: ${reference}`)
+  }
+  const memory = await getTeamMemory(team.name)
+  return {
+    teamName: team.name,
+    matches: scanTextForSecrets(memory?.content ?? ''),
+  }
 }

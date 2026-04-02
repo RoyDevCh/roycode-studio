@@ -29,6 +29,8 @@ export type AccessMode = 'workspace' | 'unrestricted'
 
 export type ExecutionMode = 'default' | 'plan' | 'worktree'
 
+export type EffortLevel = 'auto' | 'low' | 'medium' | 'high' | 'max'
+
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
 export type TodoItem = {
@@ -45,6 +47,7 @@ export type AppSettings = {
   vimMode?: boolean
   briefMode?: boolean
   voiceMode?: boolean
+  effortLevel?: EffortLevel
   promptSuggestionEnabled?: boolean
   notificationsEnabled?: boolean
   sleepGuardMode?: boolean

@@ -37,6 +37,7 @@ export type UsageEvent = {
   outputChars: number
   estimatedInputTokens: number
   estimatedOutputTokens: number
+  toolNames: string[]
   estimatedCostUsd?: number
   error?: string
 }
@@ -85,6 +86,7 @@ export type UsageSummary = {
   byProvider: Array<{ providerId: string; runs: number; estimatedCostUsd: number }>
   byModel: Array<{ model: string; runs: number; estimatedCostUsd: number }>
   bySource: Array<{ source: UsageSource; runs: number }>
+  byTool: Array<{ toolName: string; calls: number }>
   recentEvents: UsageEvent[]
 }
 
@@ -147,6 +149,7 @@ export async function recordUsageEvent(input: {
   outputChars: number
   estimatedInputTokens?: number
   estimatedOutputTokens?: number
+  toolNames?: string[]
   error?: string
 }): Promise<UsageEvent> {
   const now = new Date().toISOString()
@@ -168,6 +171,7 @@ export async function recordUsageEvent(input: {
     outputChars: Math.max(0, Math.trunc(input.outputChars)),
     estimatedInputTokens,
     estimatedOutputTokens,
+    toolNames: [...new Set((input.toolNames ?? []).map(item => item.trim()).filter(Boolean))],
     estimatedCostUsd: estimateUsageCost(
       input.model,
       estimatedInputTokens,
@@ -218,6 +222,18 @@ function aggregateBuckets<T extends string>(
     .sort((left, right) => right.runs - left.runs)
 }
 
+function aggregateToolBuckets(events: UsageEvent[]): Array<{ toolName: string; calls: number }> {
+  const buckets = new Map<string, number>()
+  for (const event of events) {
+    for (const toolName of event.toolNames) {
+      buckets.set(toolName, (buckets.get(toolName) ?? 0) + 1)
+    }
+  }
+  return [...buckets.entries()]
+    .map(([toolName, calls]) => ({ toolName, calls }))
+    .sort((left, right) => right.calls - left.calls)
+}
+
 export async function summarizeUsage(windowDays = 7): Promise<UsageSummary> {
   const events = await listUsageEvents(windowDays)
   const totalEstimatedCostUsd = events.reduce(
@@ -249,6 +265,7 @@ export async function summarizeUsage(windowDays = 7): Promise<UsageSummary> {
       source: item.key,
       runs: item.runs,
     })),
+    byTool: aggregateToolBuckets(events),
     recentEvents: events.slice(0, 10),
   }
 }

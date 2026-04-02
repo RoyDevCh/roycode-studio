@@ -103,6 +103,7 @@ const settingsPayloadSchema = z.object({
   vimMode: z.boolean().optional(),
   briefMode: z.boolean().optional(),
   voiceMode: z.boolean().optional(),
+  effortLevel: z.enum(['auto', 'low', 'medium', 'high', 'max']).optional(),
   promptSuggestionEnabled: z.boolean().optional(),
   notificationsEnabled: z.boolean().optional(),
   sleepGuardMode: z.boolean().optional(),

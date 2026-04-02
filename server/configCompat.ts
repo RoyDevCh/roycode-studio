@@ -135,6 +135,21 @@ const CONFIG_HANDLERS: ConfigHandler[] = [
     set: (settings, value) => ({ ...settings, voiceMode: parseBooleanLike(value) }),
   },
   {
+    key: 'effortLevel',
+    description: 'Preferred reasoning depth: auto, low, medium, high, or max.',
+    type: 'enum',
+    options: ['auto', 'low', 'medium', 'high', 'max'],
+    aliases: ['effort', 'reasoning.effort'],
+    get: settings => settings.effortLevel ?? 'auto',
+    set: (settings, value) => {
+      const normalized = String(value).trim().toLowerCase()
+      if (!['auto', 'low', 'medium', 'high', 'max'].includes(normalized)) {
+        throw new Error('effortLevel must be auto, low, medium, high, or max')
+      }
+      return { ...settings, effortLevel: normalized as AppSettings['effortLevel'] }
+    },
+  },
+  {
     key: 'promptSuggestionEnabled',
     description: 'Whether RoyCode should offer local next-prompt suggestions.',
     type: 'boolean',

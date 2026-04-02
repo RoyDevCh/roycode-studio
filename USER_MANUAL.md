@@ -92,7 +92,10 @@ RoyCode supports:
 /provider <id-or-name>
 /models
 /model <model-name>
+/effort [auto|low|medium|high|max]
 ```
+
+`/effort` controls the local reasoning budget RoyCode uses when it builds runtime prompt policy and agent step limits. `auto` keeps the default behavior.
 
 ### Local settings file
 
@@ -105,6 +108,7 @@ Important keys:
 - `providers`
 - `selectedProviderId`
 - `selectedModel`
+- `effortLevel`
 - `accessMode`
 - `safeWriteMode`
 - `promptSuggestionEnabled`
@@ -138,11 +142,14 @@ Useful prompt helpers:
 
 ```bash
 /review [task]
+/security-review [task]
 /fix [task]
 /plan [task]
 /explain [topic]
 /multiline
 ```
+
+`/security-review` is the stricter review variant. It biases the model toward vulnerabilities, risky shell/file behavior, missing validation, and behavior regressions.
 
 When prompt suggestions are enabled:
 
@@ -324,11 +331,19 @@ RoyCode currently supports a local TypeScript/JavaScript LSP subset.
 /mcp
 /mcp add-stdio <name> <command> [args...]
 /mcp add-http <name> <url>
+/mcp inspect <server>
+/mcp set-header <server> <key> <value>
+/mcp unset-header <server> <key>
+/mcp set-env <server> <key> <value>
+/mcp unset-env <server> <key>
+/mcp bearer <server> <token>
 /mcp tools <server>
 /mcp prompts <server>
 /mcp resources <server>
 /mcp call <server> <tool> [json]
 ```
+
+`/mcp inspect` shows the effective configuration RoyCode will use after project `.mcp.json` discovery and saved local overrides are merged.
 
 ## 14. Teams, Tasks, and Cron
 
@@ -340,10 +355,12 @@ RoyCode currently supports a local TypeScript/JavaScript LSP subset.
 /team message <team> <from> <to|all> <text>
 /team inbox <team> [member]
 /team clear-inbox <team> [member]
-/team memory <team> [show|set|append|sync] [text]
+/team memory <team> [show|set|append|sync|scan] [text]
 /team run <name> <prompt>
 /team task <name> <prompt>
 ```
+
+Team memory writes now run a high-confidence secret scan before saving. If RoyCode detects likely API keys or tokens, it blocks the write unless you retry with `--force`.
 
 ### Background tasks
 
@@ -405,6 +422,7 @@ These are local runtime summaries built from `data/usage.json`. They are useful 
 - estimated tokens
 - rough cost estimates where pricing is known
 - recent run duration and tool usage
+- top local tool-call counts across the selected window
 
 ### Advisor model
 
@@ -455,7 +473,19 @@ Current local implementation:
 
 Sleep guard is a local Windows helper that keeps the machine awake during long-running workflows.
 
-## 18. Settings Sync and Remote Triggers
+## 18. Runtime and Install Inspection
+
+```bash
+/version
+/release-notes [count]
+/upgrade status
+/upgrade run
+/color [auto|on|off|test]
+```
+
+Use these commands when you want to inspect the installed build, read recent local repo changes, or refresh the checkout in place. `/upgrade run` pulls the current branch, refreshes npm dependencies, and re-installs the global `roycode` launcher.
+
+## 19. Settings Sync and Remote Triggers
 
 ### Settings sync
 
@@ -478,7 +508,7 @@ Use `--redact-secrets` before moving bundles to another machine or sharing them.
 /remote-trigger remove <name>
 ```
 
-## 19. TUI Shortcuts
+## 20. TUI Shortcuts
 
 In the default `roycode` TUI:
 
@@ -496,7 +526,7 @@ In the default `roycode` TUI:
 - `Ctrl+L`: clear local TUI view
 - `Ctrl+C`: exit
 
-## 20. Desktop and WebUI Notes
+## 21. Desktop and WebUI Notes
 
 The WebUI and desktop app reuse the same backend and local data store.
 

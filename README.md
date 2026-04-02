@@ -57,18 +57,21 @@ Further reading:
 - RoyCode CLI now also supports conversation branching, session summaries, and local history insights through `/branch`, `/summary`, `/thinkback`, and `/insights`
 - RoyCode CLI now supports local theme and vim-mode preferences through `/theme` and `/vim`
 - RoyCode CLI now supports local brief-mode and voice-mode preferences through `/brief` and `/voice`
-- RoyCode CLI now supports local prompt suggestions, usage/cost statistics, and advisor-model second opinions
+- RoyCode CLI now supports local prompt suggestions, usage/cost statistics, advisor-model second opinions, and reasoning effort presets
+- RoyCode CLI now supports local `version`, `release-notes`, and `upgrade status/run` flows for inspecting and refreshing the installed checkout
+- RoyCode CLI now supports a dedicated `security-review` workflow for focused risk and regression auditing
 - RoyCode CLI now supports local notifications and a sleep-guard toggle for long-running workflows
 - RoyCode voice support now includes local Windows speech-to-text capture for dictated prompts
 - RoyCode CLI now supports Claude-style session helper commands such as `/session`, `/statusline`, and `/keybindings`
 - RoyCode background tasks now support output inspection, prompt updates, cancellation, and restart flows from both the CLI and the shared agent tools
-- RoyCode teams now support per-member inbox messages, shared team memory, and memory sync from recent team messages
+- RoyCode teams now support per-member inbox messages, shared team memory, memory sync from recent team messages, and secret scanning before memory writes
 - RoyCode now supports local settings bundle export/import so a machine can sync non-secret or redacted runtime setup through `/settings-sync`
 - RoyCode now supports local remote triggers that can hit saved HTTP endpoints from the CLI or the shared agent
 - RoyCode now supports local browser helpers through `/chrome open`, `/chrome search`, and `/chrome review`
 - RoyCode now supports workspace memory extraction through `/memory extract`
 - RoyCode now includes a simple local text-to-speech voice helper on Windows when voice mode is enabled
-- RoyCode now also includes local runtime statistics, usage logging, and cost estimation summaries
+- RoyCode now also includes local runtime statistics, usage logging, cost estimation summaries, and top-tool usage buckets
+- RoyCode MCP management now supports server inspection plus persisted header, bearer-token, and environment-variable edits for saved servers
 - RoyCode hooks now accept JSON stdin and structured JSON stdout so hooks can emit `systemMessage`, block execution, attach extra context, mutate prompt input, and filter by matcher text or regex more like Claude Code hooks
 - Sidebar project rail for quick workspace switching, with a chat list that behaves more like a project tree + session tree
 - Project rail now supports search, favorites, and recent-project grouping

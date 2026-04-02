@@ -117,6 +117,7 @@ What this means:
 - Extensibility is a core product layer.
 - A realistic local clone can approximate this by supporting provider presets, local skills/plugins, MCP-style connectors, workspace/session memory, rules, output styles, agent memory, and bundled built-in skills, but full parity would require a much larger ecosystem implementation.
 - RoyCode now includes a practical local subset of this layer: imported plugin directories with markdown commands and skills, project/user `.claude/skills`, project/user `.claude/commands`, project/user `.claude/agents`, project/user `.claude/rules`, project/user `.claude/output-styles`, project/user/local agent memory files, source-inspired bundled skills such as `simplify`, `verify`, `remember`, `update-config`, `skillify`, `batch`, and `debug`, plugin-provided output styles, a Claude-style `skill` execution path, local subagent execution, project `.mcp.json` auto-discovery, and user-configured MCP servers for tools, prompts, and resources.
+- RoyCode also now exposes local MCP inspection and edit flows for saved servers, including persisted HTTP headers, bearer tokens, and stdio environment overrides, which approximates part of the snapshot's richer MCP management surface without depending on Anthropic's hosted registry.
 
 ## 9. Model and Provider Layer
 
@@ -127,6 +128,7 @@ What this means:
 
 - The original system already treats "model choice" as a capability/configuration problem, not just a single hardcoded API endpoint.
 - This supports the path of making a multi-provider local tool with DeepSeek, MiniMax, and compatible OpenAI-style backends.
+- RoyCode now also carries a local `effortLevel` runtime setting so prompt policy and step-budget shaping can vary without hardcoding one reasoning depth.
 
 ## 10. Web and Current-Info Capabilities
 
@@ -203,6 +205,7 @@ What can be rebuilt locally:
 - a Claude-Code-like terminal workflow
 - slash commands and structured tools
 - Claude-style `-p/--print` execution plus project/user `.claude/skills`, `.claude/commands`, `.claude/rules`, `.claude/output-styles`, and agent-memory compatibility
+- install/runtime inspection commands such as local `version`, `release-notes`, and `upgrade status/run`
 - Claude-style project/user `.claude/agents` compatibility and current-directory nested `.claude` discovery
 - resumable sessions
 - layered prompt composition
@@ -215,6 +218,7 @@ What can be rebuilt locally:
 - self-hosted marketplace entries for local skills and plugins from paths or git URLs
 - local brief/voice preferences, statusline helpers, and keybinding surfacing in the TUI/CLI shell
 - local team inbox messages and team memory sync built on top of the task/subagent runtime
+- guarded team memory writes with high-confidence secret scanning before persistence
 - local browser helpers, remote HTTP triggers, and portable settings bundle export/import
 - local worktree workflows
 - local notebook cell editing

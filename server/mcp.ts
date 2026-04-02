@@ -268,6 +268,21 @@ export async function getMcpServer(
   )
 }
 
+function cloneServerForDataStore(server: LocalMcpServerConfig): LocalMcpServerConfig {
+  if (server.transport === 'stdio') {
+    return {
+      ...cloneJson(server),
+      source: 'data',
+      env: server.env ? cloneJson(server.env) : undefined,
+    }
+  }
+  return {
+    ...cloneJson(server),
+    source: 'data',
+    headers: server.headers ? cloneJson(server.headers) : undefined,
+  }
+}
+
 async function upsertMcpServer(server: LocalMcpServerConfig): Promise<LocalMcpServerConfig> {
   const store = await readStore()
   const index = store.servers.findIndex(item => item.name === server.name)
@@ -331,6 +346,133 @@ export async function setMcpServerEnabled(
   store.servers[index] = next
   await writeStore(store)
   return next
+}
+
+export async function inspectMcpServer(
+  name: string,
+  workspaceRoot?: string,
+): Promise<LocalMcpServerConfig> {
+  const server = await getMcpServer(name, workspaceRoot)
+  if (!server) {
+    throw new Error(`MCP server not found: ${name}`)
+  }
+  return cloneJson(server)
+}
+
+async function updateStoredMcpServer(
+  name: string,
+  workspaceRoot: string | undefined,
+  updater: (server: LocalMcpServerConfig) => LocalMcpServerConfig,
+): Promise<LocalMcpServerConfig> {
+  const current = await getMcpServer(name, workspaceRoot)
+  if (!current) {
+    throw new Error(`MCP server not found: ${name}`)
+  }
+  const next = updater(cloneServerForDataStore(current))
+  next.name = normalizeServerName(next.name)
+  next.enabled = next.enabled !== false
+  next.source = 'data'
+  return upsertMcpServer(next)
+}
+
+export async function setMcpServerHeader(
+  name: string,
+  key: string,
+  value: string,
+  workspaceRoot?: string,
+): Promise<LocalMcpServerConfig> {
+  const normalizedKey = key.trim()
+  if (!normalizedKey) {
+    throw new Error('Header name cannot be empty')
+  }
+  return updateStoredMcpServer(name, workspaceRoot, server => {
+    if (server.transport !== 'streamable-http') {
+      throw new Error('Headers can only be configured on Streamable HTTP MCP servers')
+    }
+    return {
+      ...server,
+      headers: {
+        ...(server.headers ?? {}),
+        [normalizedKey]: value,
+      },
+    }
+  })
+}
+
+export async function unsetMcpServerHeader(
+  name: string,
+  key: string,
+  workspaceRoot?: string,
+): Promise<LocalMcpServerConfig> {
+  const normalizedKey = key.trim()
+  if (!normalizedKey) {
+    throw new Error('Header name cannot be empty')
+  }
+  return updateStoredMcpServer(name, workspaceRoot, server => {
+    if (server.transport !== 'streamable-http') {
+      throw new Error('Headers can only be configured on Streamable HTTP MCP servers')
+    }
+    const nextHeaders = { ...(server.headers ?? {}) }
+    delete nextHeaders[normalizedKey]
+    return {
+      ...server,
+      headers: Object.keys(nextHeaders).length ? nextHeaders : undefined,
+    }
+  })
+}
+
+export async function setMcpServerEnv(
+  name: string,
+  key: string,
+  value: string,
+  workspaceRoot?: string,
+): Promise<LocalMcpServerConfig> {
+  const normalizedKey = key.trim()
+  if (!normalizedKey) {
+    throw new Error('Environment variable name cannot be empty')
+  }
+  return updateStoredMcpServer(name, workspaceRoot, server => {
+    if (server.transport !== 'stdio') {
+      throw new Error('Environment variables can only be configured on stdio MCP servers')
+    }
+    return {
+      ...server,
+      env: {
+        ...(server.env ?? {}),
+        [normalizedKey]: value,
+      },
+    }
+  })
+}
+
+export async function unsetMcpServerEnv(
+  name: string,
+  key: string,
+  workspaceRoot?: string,
+): Promise<LocalMcpServerConfig> {
+  const normalizedKey = key.trim()
+  if (!normalizedKey) {
+    throw new Error('Environment variable name cannot be empty')
+  }
+  return updateStoredMcpServer(name, workspaceRoot, server => {
+    if (server.transport !== 'stdio') {
+      throw new Error('Environment variables can only be configured on stdio MCP servers')
+    }
+    const nextEnv = { ...(server.env ?? {}) }
+    delete nextEnv[normalizedKey]
+    return {
+      ...server,
+      env: Object.keys(nextEnv).length ? nextEnv : undefined,
+    }
+  })
+}
+
+export async function setMcpServerBearerToken(
+  name: string,
+  token: string,
+  workspaceRoot?: string,
+): Promise<LocalMcpServerConfig> {
+  return setMcpServerHeader(name, 'Authorization', `Bearer ${token.trim()}`, workspaceRoot)
 }
 
 export async function removeMcpServer(name: string): Promise<void> {

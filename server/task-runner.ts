@@ -120,6 +120,7 @@ async function main(): Promise<void> {
       success: true,
       durationMs: Date.now() - startedAtMs,
       toolCalls: response.toolEvents.length,
+      toolNames: response.toolEvents.map(event => event.name),
       inputChars: task.prompt.length,
       outputChars: response.answer.length,
     })
@@ -167,6 +168,7 @@ async function main(): Promise<void> {
       success: false,
       durationMs: Date.now() - startedAtMs,
       toolCalls: 0,
+      toolNames: [],
       inputChars: task.prompt.length,
       outputChars: answer.length,
       error: message,

@@ -197,6 +197,7 @@ Responsibilities:
 - runtime policy sections
 - workspace instructions
 - skill/task/memory sections
+- runtime effort addenda and step-budget shaping
 
 This is the main place to modify RoyCode’s core behavior without rewriting tool code.
 
@@ -324,6 +325,8 @@ Responsibilities:
 - project `.mcp.json` discovery
 - stdio and Streamable HTTP support
 - tools, prompts, resources
+- saved server inspection and overlay editing
+- persisted HTTP headers, bearer tokens, and stdio env overrides
 
 ## 11. Tasks, Teams, Cron, Worktrees
 
@@ -345,6 +348,15 @@ Responsibilities:
 - team inbox messages
 - team memory
 - memory sync from messages
+- guarded writes backed by local secret scanning
+
+### `server/secretScanner.ts`
+
+Responsibilities:
+
+- high-confidence secret detection
+- token and API-key pattern matching
+- readable warning summaries for blocked writes
 
 ### `server/worktrees.ts`
 
@@ -451,6 +463,7 @@ Local usage accounting:
 - estimated token tracking
 - rough model pricing estimation
 - usage and cost summaries
+- per-tool call aggregation for top-tool reporting
 
 ### `server/suggestions.ts`
 
@@ -458,6 +471,26 @@ Local heuristic next-prompt suggestion layer used by:
 
 - `/suggest`
 - TUI shortcut flow
+
+## 14.5. Runtime Settings Beyond The Basic UI
+
+RoyCode stores CLI-oriented runtime flags in the same persisted settings layer as WebUI settings.
+
+Current examples:
+
+- `effortLevel`
+- `promptSuggestionEnabled`
+- `notificationsEnabled`
+- `sleepGuardMode`
+- `advisorModel`
+
+When adding a new persistent setting:
+
+1. define it in `server/types.ts`
+2. default and normalize it in `server/store.ts`
+3. expose aliases in `server/configCompat.ts`
+4. add HTTP schema support in `server/index.ts` if browser surfaces need it
+5. surface it in `server/cli.ts` and `server/tui.tsx` if it affects terminal UX
 
 ## 15. Data Directory Map
 
@@ -480,6 +513,7 @@ Important files:
 - `workspace-memory/` - persistent workspace memory
 - `usage.json` - local usage events
 - `sleep-guard.json` - current sleep guard pid state
+- `settings-sync/` - exported settings bundles when generated locally
 
 ## 16. How Commands Are Added
 
@@ -491,6 +525,12 @@ To add a new slash command:
 4. Add help text in `printHelp()`.
 5. If the command mutates state, update `isPlanModeWriteCommand(...)`.
 6. If the TUI should expose it, add a shortcut or status field in `server/tui.tsx`.
+
+Existing command-design rules:
+
+- session mutators should also update persisted session state where applicable
+- write-like or install-mutating commands must be reflected in `isPlanModeWriteCommand(...)`
+- user-visible runtime commands should be documented in `README.md`, `USER_MANUAL.md`, and this manual
 
 ## 17. How Tools Are Added
 
@@ -556,7 +596,51 @@ Preferred approach:
 
 This avoids duplicating command behavior across two terminal runtimes.
 
-## 22. Build and Packaging
+## 22. CLI Status Protocol
+
+The CLI emits lightweight machine-readable status markers that the TUI parses into a `StatusSnapshot`.
+
+Current surfaced fields include:
+
+- workspace root
+- cwd
+- provider/model
+- access mode
+- safe-write mode
+- plan/worktree mode
+- theme
+- vim mode
+- effort level
+
+If you add a new surfaced field:
+
+1. emit it from `server/cli.ts`
+2. parse it in `parseStatusSnapshot(...)` in `server/tui.tsx`
+3. render it in the TUI status/workspace panes
+
+## 23. Usage and Cost Accounting
+
+`server/usage.ts` is intentionally local-only and append-friendly.
+
+Current event payload includes:
+
+- timestamps
+- provider/model
+- duration
+- approximate input/output token counts
+- estimated cost
+- tool name list used during the run
+
+This powers:
+
+- `/usage`
+- `/cost`
+- `/stats`
+- top-tool summaries in runtime status output
+
+If pricing or token heuristics change, update this file instead of spreading pricing logic through `server/cli.ts`.
+
+## 24. Build and Packaging
 
 ### Development
 

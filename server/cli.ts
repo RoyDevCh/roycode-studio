@@ -2,8 +2,9 @@ import path from 'node:path'
 import process from 'node:process'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline/promises'
+import { fileURLToPath } from 'node:url'
 import {
   buildFileTree,
   readWorkspaceFile,
@@ -92,6 +93,7 @@ import {
   listTeamMessages,
   removeTeam,
   removeTeamMember,
+  scanTeamMemory,
   sendTeamMessage,
   setTeamMemory,
   syncTeamMemoryFromMessages,
@@ -179,13 +181,19 @@ import { inspectProjectMcpJson,
   addStdioMcpServer,
   callMcpTool,
   getMcpPrompt,
+  inspectMcpServer,
   listMcpPrompts,
   listMcpResources,
   listMcpServers,
   listMcpTools,
   readMcpResource,
   removeMcpServer,
+  setMcpServerBearerToken,
   setMcpServerEnabled,
+  setMcpServerEnv,
+  setMcpServerHeader,
+  unsetMcpServerEnv,
+  unsetMcpServerHeader,
   type LocalMcpServerConfig,
 } from './mcp.js'
 import {
@@ -222,6 +230,7 @@ import type {
   AccessMode,
   AgentMessage,
   AppSettings,
+  EffortLevel,
   ExecutionMode,
   FileNode,
   PendingChange,
@@ -231,6 +240,11 @@ import type {
   StructuredQuestionResponse,
   TodoItem,
 } from './types.js'
+
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const APP_ROOT = path.resolve(__dirname, '..')
+const PACKAGE_JSON_PATH = path.join(APP_ROOT, 'package.json')
 
 type CliAttachment = {
   path: string
@@ -297,6 +311,15 @@ const MAX_ATTACHMENT_CHARS = 12_000
 const MAX_FILE_PREVIEW_LINES = 220
 const MAX_FILE_PREVIEW_CHARS = 18_000
 const MAX_MESSAGE_TITLE_LENGTH = 72
+const MAX_RELEASE_NOTES = 10
+
+const EFFORT_DESCRIPTIONS: Record<EffortLevel, string> = {
+  auto: 'Use the default balance for the selected model and workflow.',
+  low: 'Prefer quick, direct answers and the smallest safe change.',
+  medium: 'Balance speed, code quality, and verification depth.',
+  high: 'Spend more effort on exploration, risk analysis, and validation.',
+  max: 'Use the deepest local reasoning style available in RoyCode.',
+}
 
 const RESET = '\x1b[0m'
 const BOLD = '\x1b[1m'
@@ -309,8 +332,15 @@ const MAGENTA = '\x1b[35m'
 const CYAN = '\x1b[36m'
 
 let activeReadline: ReturnType<typeof createInterface> | null = null
+let colorModeOverride: 'auto' | 'on' | 'off' = 'auto'
 
 function supportsColor(): boolean {
+  if (colorModeOverride === 'on') {
+    return true
+  }
+  if (colorModeOverride === 'off') {
+    return false
+  }
   return process.stdout.isTTY === true
 }
 
@@ -358,12 +388,58 @@ function yellow(text: string): string {
   return colorize(text, YELLOW)
 }
 
+function blue(text: string): string {
+  return colorize(text, BLUE)
+}
+
 function magenta(text: string): string {
   return colorize(text, MAGENTA)
 }
 
 function printDivider(): void {
   process.stdout.write(`${dim('-'.repeat(88))}\n`)
+}
+
+async function execProcessCapture(
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string
+    timeoutMs?: number
+    env?: NodeJS.ProcessEnv
+  } = {},
+): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd,
+      env: options.env ?? process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM')
+      reject(new Error(`${command} timed out after ${options.timeoutMs ?? 20_000}ms`))
+    }, options.timeoutMs ?? 20_000)
+    child.stdout.on('data', chunk => {
+      stdout += chunk.toString()
+    })
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString()
+    })
+    child.on('error', error => {
+      clearTimeout(timer)
+      reject(error)
+    })
+    child.on('close', code => {
+      clearTimeout(timer)
+      if (code === 0) {
+        resolve(stdout)
+      } else {
+        reject(new Error(stderr.trim() || `${command} exited with code ${code}`))
+      }
+    })
+  })
 }
 
 function truncate(value: string, max = 140): string {
@@ -401,6 +477,64 @@ function extractMessageText(message: AgentMessage): string {
 
 function measureMessageChars(messages: AgentMessage[]): number {
   return messages.reduce((sum, message) => sum + extractMessageText(message).length, 0)
+}
+
+function getEffortEnvOverride(): EffortLevel | undefined {
+  const raw =
+    process.env.ROYCODE_EFFORT_LEVEL?.trim().toLowerCase() ||
+    process.env.CLAUDE_CODE_EFFORT_LEVEL?.trim().toLowerCase() ||
+    ''
+  if (raw === 'low' || raw === 'medium' || raw === 'high' || raw === 'max' || raw === 'auto') {
+    return raw
+  }
+  return undefined
+}
+
+function resolveEffortLevel(settings: AppSettings): EffortLevel {
+  return getEffortEnvOverride() ?? settings.effortLevel ?? 'auto'
+}
+
+function describeEffortLevel(level: EffortLevel): string {
+  return EFFORT_DESCRIPTIONS[level]
+}
+
+function resolveMaxAgentSteps(
+  settings: AppSettings,
+  override?: number,
+): number | undefined {
+  if (typeof override === 'number' && Number.isFinite(override)) {
+    return override
+  }
+
+  const base = settings.maxAgentSteps
+  switch (resolveEffortLevel(settings)) {
+    case 'low':
+      return Math.max(2, Math.min(base, 5))
+    case 'medium':
+    case 'auto':
+      return base
+    case 'high':
+      return Math.max(base, 12)
+    case 'max':
+      return Math.max(base, 18)
+  }
+}
+
+function buildEffortSystemAddenda(settings: AppSettings): string[] {
+  const level = resolveEffortLevel(settings)
+  if (level === 'auto') {
+    return []
+  }
+  return [
+    `RoyCode effort level is ${level}. ${describeEffortLevel(level)}`,
+    level === 'low'
+      ? 'Bias toward straightforward answers, fast iteration, and minimal tool use.'
+      : level === 'medium'
+        ? 'Balance exploration and delivery; verify key claims but do not over-invest.'
+        : level === 'high'
+          ? 'Invest more in reading, risk analysis, and validation before concluding.'
+          : 'Use the deepest available reasoning style in this local runtime, with explicit tradeoffs and thorough verification.',
+  ]
 }
 
 function deriveTitleFromPrompt(rawInput: string): string {
@@ -513,12 +647,16 @@ function buildPromptLabel(state: CliState): string {
     state.executionMode === 'default' ? '' : ` ${yellow(`[${describeExecutionMode(state)}]`)}`
   const briefSuffix = state.settings.briefMode ? ` ${dim('[brief]')}` : ''
   const voiceSuffix = state.settings.voiceMode ? ` ${dim('[voice]')}` : ''
+  const effortSuffix =
+    resolveEffortLevel(state.settings) !== 'auto'
+      ? ` ${dim(`[effort:${resolveEffortLevel(state.settings)}]`)}`
+      : ''
   const suggestSuffix =
     state.settings.promptSuggestionEnabled !== false ? ` ${dim('[suggest]')}` : ''
   const advisorSuffix = state.settings.advisorModel
     ? ` ${dim(`[advisor:${state.settings.advisorModel}]`)}`
     : ''
-  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)}${briefSuffix}${voiceSuffix}${suggestSuffix}${advisorSuffix}${modeSuffix} ${cyan('> ')}`
+  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)}${briefSuffix}${voiceSuffix}${effortSuffix}${suggestSuffix}${advisorSuffix}${modeSuffix} ${cyan('> ')}`
 }
 
 function normalizeCommand(input: string): {
@@ -747,6 +885,7 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
     case 'compact':
     case 'rewind':
     case 'theme':
+    case 'effort':
     case 'vim':
     case 'brief':
     case 'voice':
@@ -791,7 +930,20 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
     case 'todo':
       return ['add', 'doing', 'done', 'remove', 'clear'].includes(firstArg)
     case 'mcp':
-      return ['add-stdio', 'add-http', 'enable', 'disable', 'remove', 'call'].includes(firstArg)
+      return [
+        'add-stdio',
+        'add-http',
+        'enable',
+        'disable',
+        'remove',
+        'set-header',
+        'unset-header',
+        'set-env',
+        'unset-env',
+        'bearer',
+        'set-bearer',
+        'call',
+      ].includes(firstArg)
     case 'worktree':
     case 'worktrees':
       return ['add', 'remove', 'prune', 'switch'].includes(firstArg)
@@ -816,6 +968,8 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
       return ['on', 'off', 'toggle'].includes(firstArg)
     case 'notify':
       return true
+    case 'upgrade':
+      return firstArg === 'run'
     case 'sleep-guard':
     case 'sleepguard':
       return ['on', 'off', 'toggle'].includes(firstArg)
@@ -832,6 +986,8 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
       return ['start', 'stop', 'retry', 'update'].includes(firstArg)
     case 'git':
       return ['stage', 'unstage', 'commit'].includes(firstArg)
+    case 'color':
+      return ['on', 'off', 'auto'].includes(firstArg)
     default:
       return false
   }
@@ -950,6 +1106,7 @@ function printStatus(state: CliState): void {
       `${label('vim')} ${(state.settings.vimMode ?? false) ? green('on') : red('off')}`,
       `${label('brief')} ${(state.settings.briefMode ?? false) ? green('on') : red('off')}`,
       `${label('voice')} ${(state.settings.voiceMode ?? false) ? green('on') : red('off')}`,
+      `${label('effort')} ${resolveEffortLevel(state.settings)}`,
       `${label('suggest')} ${state.settings.promptSuggestionEnabled !== false ? green('on') : red('off')}`,
       `${label('notify')} ${(state.settings.notificationsEnabled ?? false) ? green('on') : red('off')}`,
       `${label('sleep-guard')} ${(state.settings.sleepGuardMode ?? false) ? green('on') : red('off')}`,
@@ -1065,11 +1222,16 @@ function printHelp(): void {
       '/models - list models for the current provider',
       '/model <name> - switch model under the current provider',
       '/theme <dark|light|auto> - switch the preferred RoyCode theme',
+      '/color [on|off|auto|test] - control or preview ANSI color output',
       '/vim <on|off|toggle> - toggle vim-style input mode preference',
       '/brief <on|off|toggle> - toggle concise brief-mode replies',
       '/voice <on|off|toggle|say> - toggle or use local voice output',
+      '/effort [auto|low|medium|high|max] - set reasoning depth for future turns',
       '/statusline - print the compact RoyCode status line',
       '/keybindings - print the main TUI keybindings',
+      '/version - print RoyCode build and runtime version details',
+      '/release-notes [count] - show recent RoyCode commits from this local checkout',
+      '/upgrade [status|run] - inspect or self-update this RoyCode checkout',
       '/workspace <path> - change workspace root',
       '/access <workspace|unrestricted> - change filesystem mode',
       '/permissions <full|safe|workspace> - switch permission preset',
@@ -1136,6 +1298,12 @@ function printHelp(): void {
       '/mcp enable <name> - enable a configured MCP server',
       '/mcp disable <name> - disable a configured MCP server',
       '/mcp remove <name> - remove a configured MCP server',
+      '/mcp inspect <server> - inspect one MCP server config',
+      '/mcp set-header <server> <key> <value> - persist one HTTP header for a saved MCP server',
+      '/mcp unset-header <server> <key> - remove one persisted HTTP header',
+      '/mcp set-env <server> <key> <value> - persist one stdio env var for a saved MCP server',
+      '/mcp unset-env <server> <key> - remove one persisted stdio env var',
+      '/mcp bearer <server> <token> - set Authorization: Bearer ... for one HTTP MCP server',
       '/mcp tools <server> - list tools exposed by one MCP server',
       '/mcp prompts <server> - list prompts exposed by one MCP server',
       '/mcp resources <server> - list resources exposed by one MCP server',
@@ -1164,6 +1332,7 @@ function printHelp(): void {
       '/team message <team> <from> <to|all> <text> - send a local team message',
       '/team inbox <team> [member] - inspect local team messages',
       '/team clear-inbox <team> [member] - clear stored team messages',
+      '/team memory <team> scan - scan saved team memory for likely secrets',
       '/team memory <team> [show|set|append|sync] [text] - inspect or update team memory',
       '/team run <name> <prompt> - run all members of a team',
       '/team task <name> <prompt> - launch one background task per team member',
@@ -1220,6 +1389,7 @@ function printHelp(): void {
       '/notify <text> - send one local notification immediately',
       '/sleep-guard <on|off|toggle|status> - keep the machine awake locally when supported',
       '/settings-sync [status|export|import] - export or import RoyCode local settings bundles',
+      '/security-review [notes] - run a focused security review against current changes',
       '/title <text> - rename the current session',
       '/rename <text> - alias for /title',
       '/delete-session <id|latest|current> - delete a saved session',
@@ -3174,8 +3344,13 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
     const teamName = tokens.shift()
     const subaction = (tokens.shift() || 'show').toLowerCase()
     if (!teamName) {
-      fail('Usage: /team memory <team> [show|set|append|sync] [text]')
+      fail('Usage: /team memory <team> [show|set|append|sync|scan] [text]')
       return
+    }
+    const forceIndex = tokens.findIndex(token => token === '--force')
+    const force = forceIndex >= 0
+    if (forceIndex >= 0) {
+      tokens.splice(forceIndex, 1)
     }
     if (subaction === 'show') {
       const memory = await getTeamMemory(teamName)
@@ -3184,22 +3359,31 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
       printDivider()
       return
     }
+    if (subaction === 'scan') {
+      const result = await scanTeamMemory(teamName)
+      if (!result.matches.length) {
+        ok(`No high-confidence secrets detected in team memory for ${result.teamName}`)
+        return
+      }
+      warn(`Detected likely secrets in team memory for ${result.teamName}: ${result.matches.map(match => match.label).join(', ')}`)
+      return
+    }
     if (subaction === 'set') {
-      const memory = await setTeamMemory(teamName, tokens.join(' '))
+      const memory = await setTeamMemory(teamName, tokens.join(' '), { force })
       ok(`Updated team memory for ${memory.teamName}`)
       return
     }
     if (subaction === 'append') {
-      const memory = await appendTeamMemory(teamName, tokens.join(' '))
+      const memory = await appendTeamMemory(teamName, tokens.join(' '), { force })
       ok(`Appended team memory for ${memory.teamName}`)
       return
     }
     if (subaction === 'sync') {
-      const memory = await syncTeamMemoryFromMessages(teamName)
+      const memory = await syncTeamMemoryFromMessages(teamName, { force })
       ok(`Synced team memory for ${memory.teamName}`)
       return
     }
-    fail('Usage: /team memory <team> [show|set|append|sync] [text]')
+    fail('Usage: /team memory <team> [show|set|append|sync|scan] [text] [--force]')
     return
   }
 
@@ -4102,6 +4286,7 @@ async function printRuntimeStats(state: CliState): Promise<void> {
     { label: 'workspace', value: state.settings.workspaceRoot },
     { label: 'cwd', value: state.cwd },
     { label: 'mode', value: describeExecutionMode(state) },
+    { label: 'effort', value: resolveEffortLevel(state.settings) },
     { label: 'sleep-guard', value: sleepGuard.enabled ? 'on' : 'off' },
     {
       label: 'notifications',
@@ -4124,6 +4309,16 @@ async function printRuntimeStats(state: CliState): Promise<void> {
     },
     { label: 'estimated-cost', value: formatUsd(usage.totalEstimatedCostUsd) },
   ])
+  if (usage.byTool.length) {
+    process.stdout.write('\n')
+    printKeyValueBlock(
+      'Top Tools',
+      usage.byTool.slice(0, 8).map(item => ({
+        label: item.toolName,
+        value: String(item.calls),
+      })),
+    )
+  }
   printDivider()
 }
 
@@ -4162,6 +4357,16 @@ async function printUsageSummary(windowDays: number): Promise<void> {
         }))
       : [{ label: '(none)', value: '0' }],
   )
+  if (summary.byTool.length) {
+    process.stdout.write('\n')
+    printKeyValueBlock(
+      'Top Tools',
+      summary.byTool.slice(0, 10).map(item => ({
+        label: item.toolName,
+        value: String(item.calls),
+      })),
+    )
+  }
   process.stdout.write('\n')
   printKeyValueBlock(
     'Recent Events',
@@ -4195,6 +4400,247 @@ async function printCostSummary(windowDays: number): Promise<void> {
       : [{ label: '(none)', value: '$0.0000' }],
   )
   printDivider()
+}
+
+type RoyCodePackageMeta = {
+  name: string
+  version: string
+  description?: string
+  productName?: string
+}
+
+async function readRoyCodePackageMeta(): Promise<RoyCodePackageMeta> {
+  const raw = await readFile(PACKAGE_JSON_PATH, 'utf8')
+  const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as Partial<RoyCodePackageMeta>
+  return {
+    name: parsed.name ?? 'roycode-studio',
+    version: parsed.version ?? '0.0.0',
+    description: parsed.description,
+    productName: parsed.productName,
+  }
+}
+
+async function collectRoyCodeGitMetadata(
+  shell: AppSettings['defaultShell'],
+): Promise<{
+  isRepo: boolean
+  branch?: string
+  ahead?: number
+  behind?: number
+  dirty?: boolean
+  head?: string
+}> {
+  const status = await getGitStatus(APP_ROOT).catch(() => null)
+  if (!status?.isRepo) {
+    return { isRepo: false }
+  }
+  const head = await runWorkspaceCommand(
+    APP_ROOT,
+    'git rev-parse --short HEAD',
+    '.',
+    10_000,
+    'unrestricted',
+    undefined,
+    shell,
+  )
+    .then(output => output.trim())
+    .catch(() => '')
+  return {
+    isRepo: true,
+    branch: status.branch,
+    ahead: status.ahead,
+    behind: status.behind,
+    dirty: status.stagedCount + status.unstagedCount + status.untrackedCount > 0,
+    head: head || undefined,
+  }
+}
+
+async function printVersionInfo(state: CliState): Promise<void> {
+  const [pkg, gitMeta] = await Promise.all([
+    readRoyCodePackageMeta(),
+    collectRoyCodeGitMetadata(state.settings.defaultShell),
+  ])
+  printDivider()
+  process.stdout.write(`${label(pkg.productName ?? 'RoyCode Studio')}\n`)
+  printKeyValueBlock('Version', [
+    { label: 'package', value: pkg.name },
+    { label: 'version', value: pkg.version },
+    { label: 'node', value: process.version },
+    { label: 'platform', value: `${process.platform}/${process.arch}` },
+    { label: 'app-root', value: APP_ROOT },
+    { label: 'workspace', value: state.settings.workspaceRoot },
+    { label: 'shell', value: state.settings.defaultShell ?? 'powershell' },
+    { label: 'effort', value: resolveEffortLevel(state.settings) },
+  ])
+  if (gitMeta.isRepo) {
+    process.stdout.write('\n')
+    printKeyValueBlock('Git', [
+      { label: 'branch', value: gitMeta.branch ?? '(unknown)' },
+      { label: 'commit', value: gitMeta.head ?? '(unknown)' },
+      { label: 'ahead', value: String(gitMeta.ahead ?? 0) },
+      { label: 'behind', value: String(gitMeta.behind ?? 0) },
+      { label: 'dirty', value: gitMeta.dirty ? 'yes' : 'no' },
+    ])
+  }
+  printDivider()
+}
+
+async function printLocalReleaseNotes(
+  state: CliState,
+  count = MAX_RELEASE_NOTES,
+): Promise<void> {
+  const safeCount = Math.min(Math.max(count, 1), 30)
+  const output = await execProcessCapture(
+    'git',
+    ['log', '--date=short', '--pretty=reference', '-n', String(safeCount)],
+    {
+      cwd: APP_ROOT,
+      timeoutMs: 12_000,
+      env: process.env,
+    },
+  )
+  printDivider()
+  process.stdout.write(`${label(`RoyCode Release Notes (${safeCount})`)}\n`)
+  const lines = output
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+  if (!lines.length) {
+    process.stdout.write(`${dim('(no local commits found)')}\n`)
+  } else {
+    for (const line of lines) {
+      process.stdout.write(`- ${line}\n`)
+    }
+  }
+  printDivider()
+}
+
+async function printUpgradeStatus(state: CliState): Promise<void> {
+  const gitMeta = await collectRoyCodeGitMetadata(state.settings.defaultShell)
+  printDivider()
+  process.stdout.write(`${label('RoyCode Upgrade Status')}\n`)
+  if (!gitMeta.isRepo) {
+    process.stdout.write(`${dim('This RoyCode checkout is not inside a git repository.')}\n`)
+    printDivider()
+    return
+  }
+  printKeyValueBlock('Repo', [
+    { label: 'branch', value: gitMeta.branch ?? '(unknown)' },
+    { label: 'commit', value: gitMeta.head ?? '(unknown)' },
+    { label: 'ahead', value: String(gitMeta.ahead ?? 0) },
+    { label: 'behind', value: String(gitMeta.behind ?? 0) },
+    { label: 'dirty', value: gitMeta.dirty ? 'yes' : 'no' },
+  ])
+  process.stdout.write('\n')
+  process.stdout.write(
+    `${dim('Run /upgrade run to execute: git pull --ff-only, npm install, npm run install:command')}\n`,
+  )
+  printDivider()
+}
+
+async function runRoyCodeUpgrade(state: CliState): Promise<void> {
+  const steps = [
+    'git pull --ff-only',
+    'npm install',
+    'npm run install:command',
+  ]
+  printDivider()
+  process.stdout.write(`${label('RoyCode Upgrade')}\n`)
+  for (const step of steps) {
+    info(`Running ${step}`)
+    const output = await runWorkspaceCommand(
+      APP_ROOT,
+      step,
+      '.',
+      step === 'npm install' ? 300_000 : 180_000,
+      'unrestricted',
+      undefined,
+      state.settings.defaultShell,
+    )
+    process.stdout.write(`${truncate(output.trim() || '(no output)', 1200)}\n`)
+  }
+  ok('RoyCode self-upgrade completed')
+  printDivider()
+}
+
+async function buildSecurityReviewPrompt(state: CliState, notes: string): Promise<string> {
+  const status = await getGitStatus(state.settings.workspaceRoot)
+  if (!status.isRepo) {
+    return [
+      'Perform a focused security review of the current workspace.',
+      'Focus on high-confidence issues involving auth, secrets, injection, path traversal, unsafe shelling out, insecure deserialization, and data exposure.',
+      notes.trim(),
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+  }
+
+  const [gitStatus, unstagedDiff, stagedDiff, recentLog] = await Promise.all([
+    runWorkspaceCommand(
+      state.settings.workspaceRoot,
+      'git status --short --branch',
+      '.',
+      15_000,
+      state.settings.accessMode,
+      undefined,
+      state.settings.defaultShell,
+    ).catch(() => ''),
+    runWorkspaceCommand(
+      state.settings.workspaceRoot,
+      'git diff --no-ext-diff --submodule=diff -- .',
+      '.',
+      25_000,
+      state.settings.accessMode,
+      undefined,
+      state.settings.defaultShell,
+    ).catch(() => ''),
+    runWorkspaceCommand(
+      state.settings.workspaceRoot,
+      'git diff --cached --no-ext-diff --submodule=diff -- .',
+      '.',
+      25_000,
+      state.settings.accessMode,
+      undefined,
+      state.settings.defaultShell,
+    ).catch(() => ''),
+    runWorkspaceCommand(
+      state.settings.workspaceRoot,
+      'git log --oneline -n 10',
+      '.',
+      10_000,
+      state.settings.accessMode,
+      undefined,
+      state.settings.defaultShell,
+    ).catch(() => ''),
+  ])
+
+  return [
+    'You are a senior security engineer performing a focused security review.',
+    'Report only high-confidence, actionable security findings introduced or exposed by the current changes.',
+    'Ignore style issues, low-confidence speculation, generic best-practice advice, and purely theoretical concerns.',
+    'Prioritize auth/authorization issues, secrets exposure, command injection, path traversal, unsafe file operations, deserialization, insecure eval, SSRF host/protocol control, and sensitive data leakage.',
+    notes.trim() ? `Additional user instructions:\n${notes.trim()}` : '',
+    'Repository status:',
+    '```text',
+    gitStatus.trim() || '(no git status output)',
+    '```',
+    'Recent commits:',
+    '```text',
+    recentLog.trim() || '(no recent commits)',
+    '```',
+    'Unstaged diff:',
+    '```diff',
+    unstagedDiff.trim() || '(none)',
+    '```',
+    'Staged diff:',
+    '```diff',
+    stagedDiff.trim() || '(none)',
+    '```',
+    'Return findings first in markdown. For each finding include file, severity, category, exploit scenario, and fix recommendation.',
+    'If there are no findings, say so explicitly and mention any residual blind spots or missing tests.',
+  ]
+    .filter(Boolean)
+    .join('\n')
 }
 
 async function handleBranchCommand(state: CliState, rawArgs: string): Promise<void> {
@@ -4292,6 +4738,57 @@ async function handleThemeCommand(state: CliState, rawArgs: string): Promise<voi
     configValue: nextTheme,
   })
   ok(`Theme set to ${nextTheme}`)
+}
+
+async function handleColorCommand(rawArgs: string): Promise<void> {
+  const action = rawArgs.trim().toLowerCase()
+  if (!action || action === 'status') {
+    info(`Color mode is ${colorModeOverride} (${supportsColor() ? 'enabled' : 'disabled'})`)
+    info('Usage: /color <on|off|auto|test>')
+    return
+  }
+  if (action === 'test') {
+    process.stdout.write(
+      `${green('green')} ${yellow('yellow')} ${blue('blue')} ${magenta('magenta')} ${cyan('cyan')}\n`,
+    )
+    return
+  }
+  if (!['on', 'off', 'auto'].includes(action)) {
+    fail('Usage: /color <on|off|auto|test>')
+    return
+  }
+  colorModeOverride = action as typeof colorModeOverride
+  ok(`Color mode set to ${action}`)
+}
+
+async function handleEffortCommand(state: CliState, rawArgs: string): Promise<void> {
+  const action = rawArgs.trim().toLowerCase()
+  const envOverride = getEffortEnvOverride()
+  if (!action || action === 'status' || action === 'current') {
+    const effective = resolveEffortLevel(state.settings)
+    info(`Effort level is ${effective}`)
+    info(describeEffortLevel(effective))
+    if (envOverride) {
+      warn(`Environment override is active: ${envOverride}`)
+    }
+    return
+  }
+  if (!['auto', 'low', 'medium', 'high', 'max'].includes(action)) {
+    fail('Usage: /effort <auto|low|medium|high|max>')
+    return
+  }
+  await updateSettings(state, settings => ({
+    ...settings,
+    effortLevel: action as EffortLevel,
+  }))
+  await runHookSafely('config-changed', state, {
+    configKey: 'effortLevel',
+    configValue: action,
+  })
+  ok(`Effort level set to ${action}`)
+  if (envOverride && envOverride !== action) {
+    warn(`Current session still follows environment override ${envOverride}`)
+  }
 }
 
 async function handleVimCommand(state: CliState, rawArgs: string): Promise<void> {
@@ -4661,6 +5158,65 @@ async function handleAdvisorCommand(
   ok(`Advisor model set to ${nextModel}`)
 }
 
+async function handleVersionCommand(state: CliState): Promise<void> {
+  await printVersionInfo(state)
+}
+
+async function handleReleaseNotesCommand(
+  state: CliState,
+  rawArgs: string,
+): Promise<void> {
+  const parsed = Number.parseInt(rawArgs.trim(), 10)
+  await printLocalReleaseNotes(state, Number.isFinite(parsed) ? parsed : MAX_RELEASE_NOTES)
+}
+
+async function handleUpgradeCommand(state: CliState, rawArgs: string): Promise<void> {
+  const action = rawArgs.trim().toLowerCase()
+  if (!action || action === 'status' || action === 'check') {
+    await printUpgradeStatus(state)
+    return
+  }
+  if (action === 'run') {
+    await runRoyCodeUpgrade(state)
+    return
+  }
+  fail('Usage: /upgrade [status|run]')
+}
+
+async function handleSecurityReviewCommand(
+  state: CliState,
+  rawArgs: string,
+): Promise<void> {
+  const prompt = await buildSecurityReviewPrompt(state, rawArgs)
+  await runPromptInternal(state, prompt, {
+    extraSystemAddenda: [
+      'You are in RoyCode security-review mode.',
+      'This is a read-only specialist review. Do not edit files, mutate git state, or change runtime settings.',
+      'Focus on concrete security vulnerabilities with exploitability reasoning. Findings first.',
+    ],
+    disallowedTools: [
+      'write_file',
+      'replace_in_file',
+      'set_config',
+      'todo_write',
+      'create_task',
+      'update_task',
+      'stop_task',
+      'restart_task',
+      'create_cron_task',
+      'delete_cron_task',
+      'create_worktree',
+      'remove_worktree',
+      'edit_notebook_cell',
+      'add_notebook_cell',
+      'delete_notebook_cell',
+      'create_team',
+      'create_team_tasks',
+      'run_subagent',
+    ],
+  })
+}
+
 function renderStatusline(state: CliState): string {
   const provider = getSelectedProvider(state.settings)
   const model = resolveModel(state.settings, provider)
@@ -4671,6 +5227,7 @@ function renderStatusline(state: CliState): string {
     `provider ${provider.id}`,
     `model ${model || 'none'}`,
     `mode ${describeExecutionMode(state)}`,
+    `effort ${resolveEffortLevel(state.settings)}`,
     `brief ${(state.settings.briefMode ?? false) ? 'on' : 'off'}`,
     `voice ${(state.settings.voiceMode ?? false) ? 'on' : 'off'}`,
     `suggest ${state.settings.promptSuggestionEnabled !== false ? 'on' : 'off'}`,
@@ -5976,6 +6533,90 @@ async function handleMcpCommand(state: CliState, rawArgs: string): Promise<void>
     return
   }
 
+  if (action === 'inspect' || action === 'show') {
+    if (!rest) {
+      fail('Usage: /mcp inspect <server>')
+      return
+    }
+    const server = await inspectMcpServer(rest, visibleWorkspaceRoot)
+    printDivider()
+    process.stdout.write(`${JSON.stringify(server, null, 2)}\n`)
+    printDivider()
+    return
+  }
+
+  if (action === 'set-header') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const serverName = tokens.shift()
+    const headerName = tokens.shift()
+    const headerValue = tokens.join(' ').trim()
+    if (!serverName || !headerName || !headerValue) {
+      fail('Usage: /mcp set-header <server> <key> <value>')
+      return
+    }
+    const server = await setMcpServerHeader(
+      serverName,
+      headerName,
+      headerValue,
+      visibleWorkspaceRoot,
+    )
+    ok(`Updated header ${headerName} on MCP server ${server.name}`)
+    return
+  }
+
+  if (action === 'unset-header') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const serverName = tokens.shift()
+    const headerName = tokens.shift()
+    if (!serverName || !headerName) {
+      fail('Usage: /mcp unset-header <server> <key>')
+      return
+    }
+    const server = await unsetMcpServerHeader(serverName, headerName, visibleWorkspaceRoot)
+    ok(`Removed header ${headerName} from MCP server ${server.name}`)
+    return
+  }
+
+  if (action === 'set-env') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const serverName = tokens.shift()
+    const envName = tokens.shift()
+    const envValue = tokens.join(' ').trim()
+    if (!serverName || !envName || !envValue) {
+      fail('Usage: /mcp set-env <server> <key> <value>')
+      return
+    }
+    const server = await setMcpServerEnv(serverName, envName, envValue, visibleWorkspaceRoot)
+    ok(`Updated env ${envName} on MCP server ${server.name}`)
+    return
+  }
+
+  if (action === 'unset-env') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const serverName = tokens.shift()
+    const envName = tokens.shift()
+    if (!serverName || !envName) {
+      fail('Usage: /mcp unset-env <server> <key>')
+      return
+    }
+    const server = await unsetMcpServerEnv(serverName, envName, visibleWorkspaceRoot)
+    ok(`Removed env ${envName} from MCP server ${server.name}`)
+    return
+  }
+
+  if (action === 'bearer' || action === 'set-bearer') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const serverName = tokens.shift()
+    const token = tokens.join(' ').trim()
+    if (!serverName || !token) {
+      fail('Usage: /mcp bearer <server> <token>')
+      return
+    }
+    const server = await setMcpServerBearerToken(serverName, token, visibleWorkspaceRoot)
+    ok(`Updated bearer token on MCP server ${server.name}`)
+    return
+  }
+
   if (action === 'tools') {
     if (!rest) {
       fail('Usage: /mcp tools <server>')
@@ -6077,7 +6718,7 @@ async function handleMcpCommand(state: CliState, rawArgs: string): Promise<void>
   }
 
   fail(
-    'Usage: /mcp | /mcp add-stdio <name> <command> [args...] | /mcp add-http <name> <url> | /mcp enable <name> | /mcp disable <name> | /mcp remove <name> | /mcp tools <server> | /mcp prompts <server> | /mcp resources <server> | /mcp call <server> <tool> [json] | /mcp prompt <server> <prompt> [json] | /mcp resource <server> <uri>',
+    'Usage: /mcp | /mcp add-stdio <name> <command> [args...] | /mcp add-http <name> <url> | /mcp enable <name> | /mcp disable <name> | /mcp remove <name> | /mcp inspect <server> | /mcp set-header <server> <key> <value> | /mcp unset-header <server> <key> | /mcp set-env <server> <key> <value> | /mcp unset-env <server> <key> | /mcp bearer <server> <token> | /mcp tools <server> | /mcp prompts <server> | /mcp resources <server> | /mcp call <server> <tool> [json] | /mcp prompt <server> <prompt> [json] | /mcp resource <server> <uri>',
   )
 }
 
@@ -6519,6 +7160,7 @@ async function runPromptInternal(
           'RoyCode brief mode is enabled. Keep answers concise, high-signal, and compact unless the user explicitly asks for depth.',
         ]
       : []),
+    ...buildEffortSystemAddenda(state.settings),
     ...modeAddenda.extraSystemAddenda,
     ...(compactSystemMessage ? [compactSystemMessage] : []),
     ...(skillSystemMessage ? [skillSystemMessage] : []),
@@ -6567,7 +7209,7 @@ async function runPromptInternal(
         systemAddenda: systemAddenda.length ? systemAddenda : undefined,
         allowedTools: effectiveAllowedTools,
         disallowedTools: effectiveDisallowedTools,
-        maxAgentSteps: options.maxAgentSteps,
+        maxAgentSteps: resolveMaxAgentSteps(state.settings, options.maxAgentSteps),
         messages: effectiveMessages,
       },
       {
@@ -6691,6 +7333,7 @@ async function runPromptInternal(
       success: true,
       durationMs,
       toolCalls: response.toolEvents.length,
+      toolNames: response.toolEvents.map(event => event.name),
       inputChars: estimatedInputChars,
       outputChars: response.answer.length,
     })
@@ -6722,6 +7365,7 @@ async function runPromptInternal(
       success: false,
       durationMs,
       toolCalls: 0,
+      toolNames: [],
       inputChars: estimatedInputChars,
       outputChars: 0,
       error: message,
@@ -6795,6 +7439,12 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'theme':
       await handleThemeCommand(state, command.rawArgs)
       return true
+    case 'color':
+      await handleColorCommand(command.rawArgs)
+      return true
+    case 'effort':
+      await handleEffortCommand(state, command.rawArgs)
+      return true
     case 'vim':
       await handleVimCommand(state, command.rawArgs)
       return true
@@ -6825,6 +7475,16 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
       return true
     case 'keybindings':
       handleKeybindingsCommand()
+      return true
+    case 'version':
+      await handleVersionCommand(state)
+      return true
+    case 'release-notes':
+    case 'releasenotes':
+      await handleReleaseNotesCommand(state, command.rawArgs)
+      return true
+    case 'upgrade':
+      await handleUpgradeCommand(state, command.rawArgs)
       return true
     case 'workspace':
       await handleWorkspaceCommand(state, command.rawArgs)
@@ -7030,6 +7690,10 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'settings-sync':
     case 'settingssync':
       await handleSettingsSyncCommand(command.rawArgs)
+      return true
+    case 'security-review':
+    case 'securityreview':
+      await handleSecurityReviewCommand(state, command.rawArgs)
       return true
     case 'review':
     case 'fix':
