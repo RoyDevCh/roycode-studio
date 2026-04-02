@@ -7,7 +7,7 @@ import React, {
   useState,
 } from 'react'
 import { Box, render, Text, useApp, useInput, useStdout } from 'ink'
-import TextInput from 'ink-text-input'
+import Static from '../node_modules/ink/build/components/Static.js'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -137,20 +137,20 @@ function truncateText(value: string, maxLength: number): string {
 }
 
 const TuiHeader = memo(function TuiHeader(props: {
-  cwd: string
   status: string
   mode: string
   prompt: string
+  compactStatusline: string
 }): React.ReactElement {
   return (
-    <Box borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
+    <Box flexDirection="column">
       <Text bold color="cyan">
         RoyCode TUI
       </Text>
-      <Text color="gray">cwd: {props.cwd}</Text>
       <Text color="gray">status: {props.status}</Text>
       <Text color="gray">mode: {props.mode}</Text>
       <Text color="gray">prompt: {props.prompt}</Text>
+      <Text color="gray">{props.compactStatusline}</Text>
     </Box>
   )
 })
@@ -241,17 +241,17 @@ const SessionOutputPanel = memo(function SessionOutputPanel(props: {
   lines: LogEntry[]
   tail: string
   tailChannel: LogEntry['channel']
+  outputEpoch: number
 }): React.ReactElement {
   return (
-    <Box flexGrow={1} borderStyle="round" borderColor="green" paddingX={1} flexDirection="column">
-      <Text bold color="green">
-        Session Output
-      </Text>
-      {props.lines.map(entry => (
-        <Text key={entry.id} color={formatChannelColor(entry.channel)}>
-          {entry.text}
-        </Text>
-      ))}
+    <Box flexGrow={1} flexDirection="column">
+      <Static key={`output-${props.outputEpoch}`} items={props.lines}>
+        {(entry: LogEntry) => (
+          <Text key={entry.id} color={formatChannelColor(entry.channel)}>
+            {entry.text}
+          </Text>
+        )}
+      </Static>
       {props.tail ? (
         <Text color={formatChannelColor(props.tailChannel)}>{props.tail}</Text>
       ) : null}
@@ -286,10 +286,48 @@ const StructuredQuestionPanel = memo(function StructuredQuestionPanel(props: {
   )
 })
 
+const PromptComposer = memo(function PromptComposer(props: {
+  answerMode: boolean
+  resetKey: string
+  onSubmit: (value: string) => Promise<void>
+}): React.ReactElement {
+  const [localInput, setLocalInput] = useState('')
+
+  useEffect(() => {
+    setLocalInput('')
+  }, [props.resetKey])
+
+  useInput((value, key) => {
+    if (key.ctrl || key.meta || key.tab || key.escape) {
+      return
+    }
+    if (key.return) {
+      void props.onSubmit(localInput)
+      setLocalInput('')
+      return
+    }
+    if (key.backspace || key.delete) {
+      setLocalInput(current => current.slice(0, -1))
+      return
+    }
+    if (value) {
+      setLocalInput(current => current + value)
+    }
+  })
+
+  const renderedInput = `${localInput}_`
+
+  return (
+    <Box marginTop={1} flexDirection="column">
+      <Text color="yellow">{props.answerMode ? 'answer' : 'prompt'}</Text>
+      <Text>{renderedInput}</Text>
+    </Box>
+  )
+})
+
 function RoyCodeTui(): React.ReactElement {
   const { exit } = useApp()
   const { stdout } = useStdout()
-  const [input, setInput] = useState('')
   const [logs, setLogs] = useState<LogEntry[]>([
     {
       id: 'boot',
@@ -333,6 +371,8 @@ function RoyCodeTui(): React.ReactElement {
   const [history, setHistory] = useState<string[]>([])
   const [lastShortcut, setLastShortcut] = useState('none')
   const [promptLabel, setPromptLabel] = useState('roycode >')
+  const [showInspector, setShowInspector] = useState(false)
+  const [outputEpoch, setOutputEpoch] = useState(0)
   const [questionSession, setQuestionSession] = useState<StructuredQuestionSession | null>(null)
   const stateRef = useRef<CliState | null>(null)
   const stdoutBufferRef = useRef('')
@@ -344,11 +384,6 @@ function RoyCodeTui(): React.ReactElement {
   const shuttingDownRef = useRef(false)
   const deferredLogs = useDeferredValue(logs)
 
-  const maxVisibleLines = useMemo(() => {
-    const height = stdout.rows || 32
-    return Math.max(12, height - (questionSession ? 16 : 10))
-  }, [stdout.rows, questionSession])
-
   const refreshSnapshot = () => {
     const currentState = stateRef.current
     if (!currentState) {
@@ -359,8 +394,6 @@ function RoyCodeTui(): React.ReactElement {
   }
 
   useEffect(() => {
-    let cancelled = false
-
     const flushPendingOutput = () => {
       flushTimerRef.current = null
       const queuedLogs = pendingLogsRef.current
@@ -423,6 +456,8 @@ function RoyCodeTui(): React.ReactElement {
             stdoutBufferRef.current = ''
             tailRef.current = ''
             pendingLogsRef.current = []
+            stdout.write('\x1Bc')
+            setOutputEpoch(current => current + 1)
             setLogs([
               {
                 id: `log-${logIdRef.current++}`,
@@ -480,7 +515,6 @@ function RoyCodeTui(): React.ReactElement {
     void initialize()
 
     return () => {
-      cancelled = true
       if (flushTimerRef.current) {
         clearTimeout(flushTimerRef.current)
         flushTimerRef.current = null
@@ -493,11 +527,23 @@ function RoyCodeTui(): React.ReactElement {
       if (!shuttingDownRef.current && stateRef.current) {
         void saveCurrentSession(stateRef.current).catch(() => undefined)
       }
-      if (cancelled) {
-        return
-      }
     }
   }, [])
+
+  const resetView = (message: string) => {
+    stdout.write('\x1Bc')
+    stdoutBufferRef.current = ''
+    tailRef.current = ''
+    pendingLogsRef.current = []
+    setOutputEpoch(current => current + 1)
+    setLogs([
+      {
+        id: `log-${logIdRef.current++}`,
+        channel: 'system',
+        text: message,
+      },
+    ])
+  }
 
   const shutdownAndExit = async () => {
     if (shuttingDownRef.current) {
@@ -578,27 +624,16 @@ function RoyCodeTui(): React.ReactElement {
   const submitInput = async (value: string) => {
     const trimmed = value.trim()
     if (!trimmed) {
-      setInput('')
       return
     }
 
     if (questionSession) {
       await submitStructuredQuestionAnswer(trimmed)
-      setInput('')
       return
     }
 
     if (trimmed === '/clear') {
-      stdoutBufferRef.current = ''
-      tailRef.current = ''
-      setLogs([
-        {
-          id: `log-${logIdRef.current++}`,
-          channel: 'system',
-          text: 'Cleared view.',
-        },
-      ])
-      setInput('')
+      resetView('Cleared view.')
       return
     }
 
@@ -617,7 +652,6 @@ function RoyCodeTui(): React.ReactElement {
       ),
     )
     await runLocalCommand(value)
-    setInput('')
   }
 
   useInput((value: string, key: Record<string, boolean>) => {
@@ -630,15 +664,12 @@ function RoyCodeTui(): React.ReactElement {
     }
     if (key.ctrl && value === 'l') {
       setLastShortcut('Ctrl+L')
-      stdoutBufferRef.current = ''
-      tailRef.current = ''
-      setLogs([
-        {
-          id: `log-${logIdRef.current++}`,
-          channel: 'system',
-          text: 'Cleared view.',
-        },
-      ])
+      resetView('Cleared view.')
+      return
+    }
+    if (key.ctrl && value === 'd') {
+      setLastShortcut('Ctrl+D')
+      setShowInspector(current => !current)
       return
     }
 
@@ -677,38 +708,60 @@ function RoyCodeTui(): React.ReactElement {
       { keyLabel: 'Ctrl+B', action: '/brief toggle' },
       { keyLabel: 'Ctrl+I', action: '/thinkback' },
       { keyLabel: 'Ctrl+S', action: '/summary' },
+      { keyLabel: 'Ctrl+D', action: 'toggle inspector' },
       { keyLabel: 'Ctrl+L', action: 'clear view' },
       { keyLabel: 'Ctrl+C', action: 'exit' },
     ],
     [],
   )
-  const visibleLogs = useMemo(
-    () => deferredLogs.slice(-maxVisibleLines),
-    [deferredLogs, maxVisibleLines],
+  const compactStatusline = useMemo(
+    () =>
+      [
+        `session=${snapshot.session}`,
+        `workspace=${snapshot.workspace}`,
+        `provider=${snapshot.provider}`,
+        `model=${snapshot.model}`,
+        `access=${snapshot.access}`,
+        `policy=${snapshot.policy}`,
+        `cwd=${snapshot.cwd}`,
+      ].join(' | '),
+    [snapshot],
   )
 
   return (
     <Box flexDirection="column" paddingX={1} paddingY={1}>
       <TuiHeader
-        cwd={process.cwd()}
         status={status}
         mode={snapshot.mode || 'interactive tui'}
         prompt={promptLabel}
+        compactStatusline={compactStatusline}
       />
 
-      <Box marginTop={1} flexDirection="row">
-        <Box width={36} marginRight={1} flexDirection="column">
-          <WorkspacePanel snapshot={snapshot} />
-          <ShortcutsPanel shortcuts={shortcutItems} lastShortcut={lastShortcut} />
-          <RecentInputPanel entries={recentHistory} />
-        </Box>
+      {showInspector ? (
+        <Box marginTop={1} flexDirection="row">
+          <Box width={36} marginRight={1} flexDirection="column">
+            <WorkspacePanel snapshot={snapshot} />
+            <ShortcutsPanel shortcuts={shortcutItems} lastShortcut={lastShortcut} />
+            <RecentInputPanel entries={recentHistory} />
+          </Box>
 
-        <SessionOutputPanel
-          lines={visibleLogs}
-          tail={tailRef.current}
-          tailChannel={tailChannelRef.current}
-        />
-      </Box>
+          <SessionOutputPanel
+            lines={deferredLogs}
+            tail={tailRef.current}
+            tailChannel={tailChannelRef.current}
+            outputEpoch={outputEpoch}
+          />
+        </Box>
+      ) : (
+        <Box marginTop={1}>
+          <SessionOutputPanel
+            lines={deferredLogs}
+            tail={tailRef.current}
+            tailChannel={tailChannelRef.current}
+            outputEpoch={outputEpoch}
+          />
+        </Box>
+      )}
 
       {questionSession ? (
         <StructuredQuestionPanel
@@ -718,10 +771,11 @@ function RoyCodeTui(): React.ReactElement {
         />
       ) : null}
 
-      <Box marginTop={1} borderStyle="round" borderColor="yellow" paddingX={1}>
-        <Text color="yellow">{questionSession ? 'answer' : '>'} </Text>
-        <TextInput value={input} onChange={setInput} onSubmit={value => void submitInput(value)} />
-      </Box>
+      <PromptComposer
+        answerMode={Boolean(questionSession)}
+        resetKey={questionSession ? `question-${questionSession.index}` : 'prompt'}
+        onSubmit={submitInput}
+      />
       <Box marginTop={1}>
         <Text color="gray">
           Tip: /help shows the full command surface. /clear only clears the local TUI view.
