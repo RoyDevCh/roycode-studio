@@ -15,9 +15,26 @@ const IGNORED_DIRS = new Set([
 
 const MAX_TEXT_SIZE = 512 * 1024
 const MAX_COMMAND_OUTPUT = 24_000
+const SKIPPABLE_FILESYSTEM_ERROR_CODES = new Set([
+  'EPERM',
+  'EACCES',
+  'ENOENT',
+  'ENOTDIR',
+  'EBUSY',
+  'UNKNOWN',
+])
 
 function stripBom(value: string): string {
   return value.replace(/^\uFEFF/, '')
+}
+
+function isSkippableFilesystemError(error: unknown): error is NodeJS.ErrnoException {
+  return (
+    error instanceof Error &&
+    'code' in error &&
+    typeof (error as NodeJS.ErrnoException).code === 'string' &&
+    SKIPPABLE_FILESYSTEM_ERROR_CODES.has((error as NodeJS.ErrnoException).code as string)
+  )
 }
 
 function readAdditionalWorkspaceRootsFromEnv(): string[] {
@@ -140,7 +157,15 @@ async function walkDirectory(
   depth: number,
   accessMode: AccessMode,
 ): Promise<FileNode[]> {
-  const entries = await readdir(currentDir, { withFileTypes: true })
+  let entries
+  try {
+    entries = await readdir(currentDir, { withFileTypes: true })
+  } catch (error) {
+    if (isSkippableFilesystemError(error)) {
+      return []
+    }
+    throw error
+  }
   const visibleEntries = entries
     .filter(entry => !entry.name.startsWith('.DS_Store'))
     .filter(entry => !IGNORED_DIRS.has(entry.name))
@@ -154,13 +179,21 @@ async function walkDirectory(
   const output: FileNode[] = []
   for (const entry of visibleEntries) {
     const fullPath = path.join(currentDir, entry.name)
+    const isDirectory = entry.isDirectory() && !entry.isSymbolicLink()
     const node: FileNode = {
       name: entry.name,
       path: toWorkspaceRelative(workspaceRoot, fullPath, accessMode),
-      type: entry.isDirectory() ? 'directory' : 'file',
+      type: isDirectory ? 'directory' : 'file',
     }
-    if (entry.isDirectory() && depth > 0) {
-      node.children = await walkDirectory(workspaceRoot, fullPath, depth - 1, accessMode)
+    if (isDirectory && depth > 0) {
+      try {
+        node.children = await walkDirectory(workspaceRoot, fullPath, depth - 1, accessMode)
+      } catch (error) {
+        if (!isSkippableFilesystemError(error)) {
+          throw error
+        }
+        node.children = []
+      }
     }
     output.push(node)
   }
@@ -261,7 +294,15 @@ async function walkForSearch(
   if (results.length >= maxResults) {
     return
   }
-  const entries = await readdir(currentDir, { withFileTypes: true })
+  let entries
+  try {
+    entries = await readdir(currentDir, { withFileTypes: true })
+  } catch (error) {
+    if (isSkippableFilesystemError(error)) {
+      return
+    }
+    throw error
+  }
   for (const entry of entries) {
     if (results.length >= maxResults) {
       return
@@ -270,8 +311,14 @@ async function walkForSearch(
       continue
     }
     const fullPath = path.join(currentDir, entry.name)
-    if (entry.isDirectory()) {
-      await walkForSearch(workspaceRoot, fullPath, query, results, maxResults, accessMode)
+    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+      try {
+        await walkForSearch(workspaceRoot, fullPath, query, results, maxResults, accessMode)
+      } catch (error) {
+        if (!isSkippableFilesystemError(error)) {
+          throw error
+        }
+      }
       continue
     }
     try {
