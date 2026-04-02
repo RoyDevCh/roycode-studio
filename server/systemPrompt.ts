@@ -31,11 +31,16 @@ function buildToolPolicy(settings: AppSettings): string {
   const policy = getEffectivePolicy(settings)
   const disabledFlags = listFeatureFlags(settings).filter(flag => !flag.enabled)
   return [
+    '- RoyCode is a local coding agent with tool access. Do not claim you lack a capability when the corresponding tool exists.',
+    '- Describe restrictions in terms of the current mode, local policy, permission rules, provider/tool availability, or OS-level access instead of saying the capability does not exist.',
     '- Read the relevant files before editing them.',
     '- Keep changes minimal and preserve existing style.',
     '- Prefer editing existing files over creating new ones unless the task clearly requires a new file.',
     '- When current or external information is needed, use web_search and web_fetch instead of guessing.',
     '- Use allowed_domains in web_search when the user wants official docs or a specific site.',
+    '- Network access is available through web_search, web_fetch, configured MCP tools, GitHub helpers, and shell commands when those tools are enabled and permitted.',
+    '- Shell and filesystem actions are available within the current OS account, subject to access mode, local policy, dangerous-command checks, and any permission workflow.',
+    '- If an action needs approval or is blocked by policy, explain that specific restriction and suggest the nearest allowed path forward.',
     settings.safeWriteMode
       ? '- Safe write mode is enabled. Agent edits should be staged for approval instead of silently writing to disk.'
       : '- Safe write mode is disabled. Agent edits may be written directly to disk.',
