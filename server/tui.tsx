@@ -30,6 +30,10 @@ type StatusSnapshot = {
   vim?: string
   brief?: string
   voice?: string
+  suggest?: string
+  notify?: string
+  advisor?: string
+  sleepGuard?: string
   safeWrite?: string
   style?: string
   provider?: string
@@ -126,6 +130,10 @@ function parseStatusSnapshot(line: string): Partial<StatusSnapshot> | null {
     ['vim', 'vim '],
     ['brief', 'brief '],
     ['voice', 'voice '],
+    ['suggest', 'suggest '],
+    ['notify', 'notify '],
+    ['advisor', 'advisor '],
+    ['sleepGuard', 'sleep-guard '],
     ['safeWrite', 'safe-write '],
     ['style', 'style '],
     ['provider', 'provider '],
@@ -156,7 +164,7 @@ function RoyCodeTui(): React.ReactElement {
     {
       id: 'boot',
       channel: 'system',
-      text: 'RoyCode TUI ready. Type /help for commands. Ctrl+L clears the view, Ctrl+R sends /status, Ctrl+W sends /context, Ctrl+Y sends /cron, Ctrl+K sends /worktree, Ctrl+O sends /plan-mode status, Ctrl+B toggles brief mode, Ctrl+I opens thinkback, Ctrl+S runs /summary.',
+      text: 'RoyCode TUI ready. Type /help for commands. Ctrl+L clears the view, Ctrl+R sends /status, Ctrl+W sends /context, Ctrl+J sends /suggest, Ctrl+Y sends /cron, Ctrl+K sends /worktree, Ctrl+O sends /plan-mode status, Ctrl+B toggles brief mode, Ctrl+I opens thinkback, Ctrl+S runs /summary.',
     },
   ])
   const [status, setStatus] = useState('Launching RoyCode CLI...')
@@ -305,6 +313,11 @@ function RoyCodeTui(): React.ReactElement {
       childRef.current?.stdin.write('/pending\n')
       return
     }
+    if (key.ctrl && value === 'j') {
+      setLastShortcut('Ctrl+J')
+      childRef.current?.stdin.write('/suggest\n')
+      return
+    }
     if (key.ctrl && value === 'y') {
       setLastShortcut('Ctrl+Y')
       childRef.current?.stdin.write('/cron\n')
@@ -409,6 +422,10 @@ function RoyCodeTui(): React.ReactElement {
             <Text color="gray">vim: {snapshot.vim ?? 'unknown'}</Text>
             <Text color="gray">brief: {snapshot.brief ?? 'unknown'}</Text>
             <Text color="gray">voice: {snapshot.voice ?? 'unknown'}</Text>
+            <Text color="gray">suggest: {snapshot.suggest ?? 'unknown'}</Text>
+            <Text color="gray">notify: {snapshot.notify ?? 'unknown'}</Text>
+            <Text color="gray">advisor: {snapshot.advisor ?? 'unknown'}</Text>
+            <Text color="gray">sleep-guard: {snapshot.sleepGuard ?? 'unknown'}</Text>
             <Text color="gray">safe-write: {snapshot.safeWrite ?? 'unknown'}</Text>
             <Text color="gray">mode: {snapshot.mode ?? 'unknown'}</Text>
             <Text color="gray">skills: {snapshot.skills ?? 'unknown'}</Text>
@@ -429,6 +446,7 @@ function RoyCodeTui(): React.ReactElement {
             <Text color="gray">Ctrl+W: /context</Text>
             <Text color="gray">Ctrl+G: /git</Text>
             <Text color="gray">Ctrl+P: /pending</Text>
+            <Text color="gray">Ctrl+J: /suggest</Text>
             <Text color="gray">Ctrl+Y: /cron</Text>
             <Text color="gray">Ctrl+K: /worktree</Text>
             <Text color="gray">Ctrl+O: /plan-mode status</Text>

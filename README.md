@@ -2,6 +2,11 @@
 
 RoyCode Studio is a personal WebUI coding workspace built next to the Claude Code source snapshot in this repo. The goal is not to rebuild the leaked CLI exactly as-is, but to turn the useful ideas in that snapshot into a practical multi-model coding tool with a browser interface.
 
+Further reading:
+
+- [USER_MANUAL.md](./USER_MANUAL.md) - day-to-day usage guide for CLI, TUI, WebUI, and desktop workflows
+- [DEVELOPMENT_MANUAL.md](./DEVELOPMENT_MANUAL.md) - architecture and extension guide for future RoyCode development
+
 ## What It Supports
 
 - Quick-add API presets for DeepSeek, MiniMax, and custom OpenAI-compatible endpoints
@@ -33,7 +38,7 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - RoyCode now includes a self-hosted `bridge` layer that can talk to another RoyCode server over HTTP for health, context, and remote command execution
 - RoyCode now includes a self-hosted `marketplace` registry for installable local skills or plugins from a path or git URL
 - RoyCode now includes a local TypeScript/JavaScript `LSP` subset for diagnostics, definitions, implementations, references, rename preview, rename apply, hover, document symbols, and workspace symbols
-- RoyCode now ships a bundled local skill set adapted from the source snapshot, including `simplify`, `verify`, `remember`, `update-config`, `skillify`, `batch`, `debug`, `keybindings`, `stuck`, and `lorem-ipsum`
+- RoyCode now ships a bundled local skill set adapted from the source snapshot, including `simplify`, `verify`, `remember`, `update-config`, `skillify`, `batch`, `debug`, `keybindings`, `stuck`, `lorem-ipsum`, and `claude-api`
 - RoyCode CLI now supports local plugins with markdown command loading, direct `/plugin-name:command` execution, and plugin-provided skills
 - RoyCode now supports user-configured local MCP servers over `stdio` and Streamable HTTP, including MCP tools, prompts, and resources
 - RoyCode now supports structured in-terminal follow-up questions through the shared `ask_user_question` tool path, so a running agent can request constrained answers instead of only free-form text
@@ -52,6 +57,9 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - RoyCode CLI now also supports conversation branching, session summaries, and local history insights through `/branch`, `/summary`, `/thinkback`, and `/insights`
 - RoyCode CLI now supports local theme and vim-mode preferences through `/theme` and `/vim`
 - RoyCode CLI now supports local brief-mode and voice-mode preferences through `/brief` and `/voice`
+- RoyCode CLI now supports local prompt suggestions, usage/cost statistics, and advisor-model second opinions
+- RoyCode CLI now supports local notifications and a sleep-guard toggle for long-running workflows
+- RoyCode voice support now includes local Windows speech-to-text capture for dictated prompts
 - RoyCode CLI now supports Claude-style session helper commands such as `/session`, `/statusline`, and `/keybindings`
 - RoyCode background tasks now support output inspection, prompt updates, cancellation, and restart flows from both the CLI and the shared agent tools
 - RoyCode teams now support per-member inbox messages, shared team memory, and memory sync from recent team messages
@@ -60,6 +68,7 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - RoyCode now supports local browser helpers through `/chrome open`, `/chrome search`, and `/chrome review`
 - RoyCode now supports workspace memory extraction through `/memory extract`
 - RoyCode now includes a simple local text-to-speech voice helper on Windows when voice mode is enabled
+- RoyCode now also includes local runtime statistics, usage logging, and cost estimation summaries
 - RoyCode hooks now accept JSON stdin and structured JSON stdout so hooks can emit `systemMessage`, block execution, attach extra context, mutate prompt input, and filter by matcher text or regex more like Claude Code hooks
 - Sidebar project rail for quick workspace switching, with a chat list that behaves more like a project tree + session tree
 - Project rail now supports search, favorites, and recent-project grouping

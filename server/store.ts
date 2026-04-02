@@ -32,6 +32,10 @@ function getDefaultSettings(): AppSettings {
     vimMode: false,
     briefMode: false,
     voiceMode: false,
+    promptSuggestionEnabled: true,
+    notificationsEnabled: false,
+    sleepGuardMode: false,
+    advisorModel: '',
     outputStyle: 'default',
     cleanupPeriodDays: 30,
     defaultShell: 'powershell',
@@ -70,6 +74,22 @@ function normalizeSettings(raw: Partial<AppSettings>): AppSettings {
       typeof raw.briefMode === 'boolean' ? raw.briefMode : defaults.briefMode,
     voiceMode:
       typeof raw.voiceMode === 'boolean' ? raw.voiceMode : defaults.voiceMode,
+    promptSuggestionEnabled:
+      typeof raw.promptSuggestionEnabled === 'boolean'
+        ? raw.promptSuggestionEnabled
+        : defaults.promptSuggestionEnabled,
+    notificationsEnabled:
+      typeof raw.notificationsEnabled === 'boolean'
+        ? raw.notificationsEnabled
+        : defaults.notificationsEnabled,
+    sleepGuardMode:
+      typeof raw.sleepGuardMode === 'boolean'
+        ? raw.sleepGuardMode
+        : defaults.sleepGuardMode,
+    advisorModel:
+      typeof raw.advisorModel === 'string'
+        ? raw.advisorModel
+        : defaults.advisorModel,
     safeWriteMode: raw.safeWriteMode ?? defaults.safeWriteMode,
     outputStyle: raw.outputStyle ?? defaults.outputStyle,
     cleanupPeriodDays:

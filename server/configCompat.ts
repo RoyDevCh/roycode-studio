@@ -135,6 +135,50 @@ const CONFIG_HANDLERS: ConfigHandler[] = [
     set: (settings, value) => ({ ...settings, voiceMode: parseBooleanLike(value) }),
   },
   {
+    key: 'promptSuggestionEnabled',
+    description: 'Whether RoyCode should offer local next-prompt suggestions.',
+    type: 'boolean',
+    aliases: ['suggestions', 'suggest', 'ui.suggestions'],
+    get: settings => settings.promptSuggestionEnabled ?? true,
+    set: (settings, value) => ({
+      ...settings,
+      promptSuggestionEnabled: parseBooleanLike(value),
+    }),
+  },
+  {
+    key: 'notificationsEnabled',
+    description: 'Whether RoyCode should send local desktop notifications when supported.',
+    type: 'boolean',
+    aliases: ['notifications', 'notify', 'ui.notifications'],
+    get: settings => settings.notificationsEnabled ?? false,
+    set: (settings, value) => ({
+      ...settings,
+      notificationsEnabled: parseBooleanLike(value),
+    }),
+  },
+  {
+    key: 'sleepGuardMode',
+    description: 'Whether RoyCode should keep a local sleep-prevention guard active when supported.',
+    type: 'boolean',
+    aliases: ['sleep-guard', 'sleepGuard', 'runtime.sleepGuard'],
+    get: settings => settings.sleepGuardMode ?? false,
+    set: (settings, value) => ({
+      ...settings,
+      sleepGuardMode: parseBooleanLike(value),
+    }),
+  },
+  {
+    key: 'advisorModel',
+    description: 'Optional secondary model used for advisor passes and second opinions.',
+    type: 'string',
+    aliases: ['advisor', 'models.advisor'],
+    get: settings => settings.advisorModel ?? '',
+    set: (settings, value) => ({
+      ...settings,
+      advisorModel: String(value).trim(),
+    }),
+  },
+  {
     key: 'permissions.defaultMode',
     description: 'Claude-style permission preset: workspace, safe, or full.',
     type: 'enum',

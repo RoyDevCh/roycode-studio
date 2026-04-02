@@ -45,6 +45,10 @@ export type AppSettings = {
   vimMode?: boolean
   briefMode?: boolean
   voiceMode?: boolean
+  promptSuggestionEnabled?: boolean
+  notificationsEnabled?: boolean
+  sleepGuardMode?: boolean
+  advisorModel?: string
   outputStyle?: string
   cleanupPeriodDays?: number
   defaultShell?: 'powershell' | 'bash'

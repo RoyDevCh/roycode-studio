@@ -97,7 +97,13 @@ import {
   syncTeamMemoryFromMessages,
 } from './teams.js'
 import { buildBrowserSearchUrl, openUrlInBrowser } from './chrome.js'
-import { describeVoiceSupport, speakText } from './voice.js'
+import { describeVoiceSupport, listenForSpeech, speakText } from './voice.js'
+import { describeNotifierSupport, sendLocalNotification } from './notifier.js'
+import {
+  disableSleepGuard,
+  enableSleepGuard,
+  getSleepGuardStatus,
+} from './sleepGuard.js'
 import {
   describeSettingsSync,
   exportSettingsBundle,
@@ -206,6 +212,12 @@ import {
   startCronScheduler,
   stopCronScheduler,
 } from './cron.js'
+import {
+  recordUsageEvent,
+  summarizeUsage,
+  type UsageSource,
+} from './usage.js'
+import { buildPromptSuggestions } from './suggestions.js'
 import type {
   AccessMode,
   AgentMessage,
@@ -257,6 +269,7 @@ type CliState = {
   pendingAttachments: CliAttachment[]
   activeSkills: string[]
   compactSummaries: string[]
+  lastSuggestions: string[]
   sessionId: string
   sessionTitle: string
   sessionCreatedAt: string
@@ -376,6 +389,20 @@ function cloneMessages(messages: AgentMessage[]): AgentMessage[] {
   return JSON.parse(JSON.stringify(messages)) as AgentMessage[]
 }
 
+function extractMessageText(message: AgentMessage): string {
+  if (typeof message.content === 'string') {
+    return message.content
+  }
+  return message.content
+    .filter(part => part.type === 'text')
+    .map(part => part.text)
+    .join('\n')
+}
+
+function measureMessageChars(messages: AgentMessage[]): number {
+  return messages.reduce((sum, message) => sum + extractMessageText(message).length, 0)
+}
+
 function deriveTitleFromPrompt(rawInput: string): string {
   const normalized = rawInput.replace(/\s+/g, ' ').trim()
   if (!normalized) {
@@ -392,6 +419,7 @@ function createFreshState(settings: AppSettings): CliState {
     pendingAttachments: [],
     activeSkills: [],
     compactSummaries: [],
+    lastSuggestions: [],
     sessionId: createSessionId(),
     sessionTitle: 'New session',
     sessionCreatedAt: new Date().toISOString(),
@@ -485,7 +513,12 @@ function buildPromptLabel(state: CliState): string {
     state.executionMode === 'default' ? '' : ` ${yellow(`[${describeExecutionMode(state)}]`)}`
   const briefSuffix = state.settings.briefMode ? ` ${dim('[brief]')}` : ''
   const voiceSuffix = state.settings.voiceMode ? ` ${dim('[voice]')}` : ''
-  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)}${briefSuffix}${voiceSuffix}${modeSuffix} ${cyan('> ')}`
+  const suggestSuffix =
+    state.settings.promptSuggestionEnabled !== false ? ` ${dim('[suggest]')}` : ''
+  const advisorSuffix = state.settings.advisorModel
+    ? ` ${dim(`[advisor:${state.settings.advisorModel}]`)}`
+    : ''
+  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)}${briefSuffix}${voiceSuffix}${suggestSuffix}${advisorSuffix}${modeSuffix} ${cyan('> ')}`
 }
 
 function normalizeCommand(input: string): {
@@ -775,6 +808,17 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
     case 'settings-sync':
     case 'settingssync':
       return ['import'].includes(firstArg)
+    case 'advisor':
+      return !['', 'status', 'review', 'ask', 'run'].includes(firstArg)
+    case 'suggest':
+      return ['on', 'off', 'toggle'].includes(firstArg)
+    case 'notifications':
+      return ['on', 'off', 'toggle'].includes(firstArg)
+    case 'notify':
+      return true
+    case 'sleep-guard':
+    case 'sleepguard':
+      return ['on', 'off', 'toggle'].includes(firstArg)
     case 'remote-trigger':
     case 'remotetrigger':
       return ['add', 'enable', 'disable', 'remove', 'delete'].includes(firstArg)
@@ -906,14 +950,19 @@ function printStatus(state: CliState): void {
       `${label('vim')} ${(state.settings.vimMode ?? false) ? green('on') : red('off')}`,
       `${label('brief')} ${(state.settings.briefMode ?? false) ? green('on') : red('off')}`,
       `${label('voice')} ${(state.settings.voiceMode ?? false) ? green('on') : red('off')}`,
+      `${label('suggest')} ${state.settings.promptSuggestionEnabled !== false ? green('on') : red('off')}`,
+      `${label('notify')} ${(state.settings.notificationsEnabled ?? false) ? green('on') : red('off')}`,
+      `${label('sleep-guard')} ${(state.settings.sleepGuardMode ?? false) ? green('on') : red('off')}`,
       `${label('safe-write')} ${state.settings.safeWriteMode ? green('on') : red('off')}`,
       `${label('style')} ${state.settings.outputStyle || DEFAULT_OUTPUT_STYLE_NAME}`,
       `${label('provider')} ${provider.name}`,
       `${label('model')} ${model || 'none'}`,
+      `${label('advisor')} ${state.settings.advisorModel || 'off'}`,
       `${label('cwd')} ${state.cwd}`,
       `${label('mode')} ${describeExecutionMode(state)}`,
       `${label('skills')} ${state.activeSkills.length ? state.activeSkills.join(', ') : 'none'}`,
       `${label('summaries')} ${state.compactSummaries.length}`,
+      `${label('suggestions')} ${state.lastSuggestions.length}`,
     ].join(` ${dim('|')} `) + '\n',
   )
 }
@@ -1162,6 +1211,14 @@ function printHelp(): void {
       '/summary [instructions] - summarize the current conversation',
       '/thinkback - inspect saved session history and usage patterns',
       '/insights - alias for /thinkback',
+      '/usage [today|7d|30d|days] - summarize recent RoyCode runs',
+      '/cost [today|7d|30d|days] - estimate recent token cost from local usage logs',
+      '/stats - inspect local runtime counts and recent activity',
+      '/advisor <model>|off|status|review [text] - configure or run a second-opinion advisor model',
+      '/suggest [show|run <index>|on|off|toggle|status] - inspect or use local next-prompt suggestions',
+      '/notifications <on|off|toggle|status|test [text]> - configure local desktop notifications',
+      '/notify <text> - send one local notification immediately',
+      '/sleep-guard <on|off|toggle|status> - keep the machine awake locally when supported',
       '/settings-sync [status|export|import] - export or import RoyCode local settings bundles',
       '/title <text> - rename the current session',
       '/rename <text> - alias for /title',
@@ -1368,6 +1425,7 @@ async function loadSessionIntoState(
   state.pendingAttachments = []
   state.activeSkills = [...(record.activeSkills ?? [])]
   state.compactSummaries = [...(record.compactSummaries ?? [])]
+  state.lastSuggestions = []
   state.sessionId = record.id
   state.sessionTitle = record.title || 'New session'
   state.sessionCreatedAt = record.createdAt
@@ -1386,6 +1444,7 @@ function startFreshSession(state: CliState): void {
   state.pendingAttachments = []
   state.activeSkills = []
   state.compactSummaries = []
+  state.lastSuggestions = []
   state.sessionId = createSessionId()
   state.sessionTitle = 'New session'
   state.sessionCreatedAt = new Date().toISOString()
@@ -3167,7 +3226,12 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
       const answer = await runPromptInternal(
         state,
         await buildTeamMemberPrompt(team.name, member, taskPrompt),
-        agent ? await buildAgentPromptRunOptions(state, agent, [`Team member: ${member.name}`]) : { isolated: true },
+        agent
+          ? {
+              ...(await buildAgentPromptRunOptions(state, agent, [`Team member: ${member.name}`])),
+              source: 'team',
+            }
+          : { isolated: true, source: 'team' },
       )
       process.stdout.write(`${magenta(member.name)}\n${answer || ''}\n`)
     }
@@ -3944,6 +4008,195 @@ function printThinkbackSummary(summary: ThinkbackSummary): void {
   printDivider()
 }
 
+function parseUsageWindowDays(rawArgs: string): number {
+  const normalized = rawArgs.trim().toLowerCase()
+  if (!normalized) {
+    return 7
+  }
+  if (normalized === 'today' || normalized === '1d') {
+    return 1
+  }
+  if (normalized === '7d' || normalized === 'week' || normalized === 'weekly') {
+    return 7
+  }
+  if (normalized === '30d' || normalized === 'month' || normalized === 'monthly') {
+    return 30
+  }
+  const numeric = Number.parseInt(normalized, 10)
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return Math.min(365, numeric)
+  }
+  throw new Error('Usage window must be today, 7d, 30d, or a positive number of days')
+}
+
+function formatDurationMs(durationMs: number): string {
+  if (durationMs < 1000) {
+    return `${durationMs}ms`
+  }
+  if (durationMs < 60_000) {
+    return `${(durationMs / 1000).toFixed(1)}s`
+  }
+  return `${(durationMs / 60_000).toFixed(1)}m`
+}
+
+function formatUsd(value: number): string {
+  return value > 0 ? `$${value.toFixed(4)}` : '$0.0000'
+}
+
+function buildSuggestionContext(state: CliState) {
+  return {
+    workspaceRoot: state.settings.workspaceRoot,
+    cwd: state.cwd,
+    executionMode: state.executionMode,
+    activeSkills: state.activeSkills,
+    briefMode: state.settings.briefMode ?? false,
+    pendingAttachments: state.pendingAttachments.length,
+    compactSummaries: state.compactSummaries.length,
+    messages: state.messages,
+  }
+}
+
+function printSuggestions(state: CliState): void {
+  if (!state.lastSuggestions.length) {
+    info('No prompt suggestions are cached yet. Run /suggest first.')
+    return
+  }
+  printDivider()
+  process.stdout.write(`${label('Prompt Suggestions')}\n`)
+  state.lastSuggestions.forEach((suggestion, index) => {
+    process.stdout.write(`${index + 1}. ${suggestion}\n`)
+  })
+  printDivider()
+}
+
+async function printRuntimeStats(state: CliState): Promise<void> {
+  const [sessions, tasks, hooks, teams, plugins, mcpServers, skills, commands, usage] =
+    await Promise.all([
+      listCliSessions(),
+      listTasks(),
+      listHooks(),
+      listTeams(),
+      listInstalledPlugins(),
+      listMcpServers(state.settings.workspaceRoot),
+      listLocalSkills(state.settings.workspaceRoot, state.cwd),
+      listLocalCompatCommands(state.settings.workspaceRoot, state.cwd),
+      summarizeUsage(30),
+    ])
+
+  const sleepGuard = await getSleepGuardStatus()
+  printDivider()
+  process.stdout.write(`${label('RoyCode Runtime Stats')}\n`)
+  process.stdout.write(
+    [
+      `${label('sessions')} ${sessions.length}`,
+      `${label('tasks')} ${tasks.length}`,
+      `${label('hooks')} ${hooks.length}`,
+      `${label('teams')} ${teams.length}`,
+      `${label('plugins')} ${plugins.length}`,
+      `${label('mcp')} ${mcpServers.length}`,
+      `${label('skills')} ${skills.length}`,
+      `${label('commands')} ${commands.length}`,
+    ].join(` ${dim('|')} `) + '\n\n',
+  )
+  printKeyValueBlock('Current Runtime', [
+    { label: 'workspace', value: state.settings.workspaceRoot },
+    { label: 'cwd', value: state.cwd },
+    { label: 'mode', value: describeExecutionMode(state) },
+    { label: 'sleep-guard', value: sleepGuard.enabled ? 'on' : 'off' },
+    {
+      label: 'notifications',
+      value: state.settings.notificationsEnabled ? 'on' : 'off',
+    },
+    {
+      label: 'suggestions',
+      value: state.settings.promptSuggestionEnabled === false ? 'off' : 'on',
+    },
+  ])
+  process.stdout.write('\n')
+  printKeyValueBlock('Usage (30d)', [
+    { label: 'runs', value: String(usage.totalRuns) },
+    { label: 'success', value: String(usage.successfulRuns) },
+    { label: 'failed', value: String(usage.failedRuns) },
+    { label: 'tool-calls', value: String(usage.totalToolCalls) },
+    {
+      label: 'estimated-tokens',
+      value: `${usage.totalInputTokens} in / ${usage.totalOutputTokens} out`,
+    },
+    { label: 'estimated-cost', value: formatUsd(usage.totalEstimatedCostUsd) },
+  ])
+  printDivider()
+}
+
+async function printUsageSummary(windowDays: number): Promise<void> {
+  const summary = await summarizeUsage(windowDays)
+  printDivider()
+  process.stdout.write(`${label(`RoyCode Usage (${windowDays}d)`)}\n\n`)
+  printKeyValueBlock('Totals', [
+    { label: 'runs', value: String(summary.totalRuns) },
+    { label: 'success', value: String(summary.successfulRuns) },
+    { label: 'failed', value: String(summary.failedRuns) },
+    { label: 'duration', value: formatDurationMs(summary.totalDurationMs) },
+    { label: 'tool-calls', value: String(summary.totalToolCalls) },
+    {
+      label: 'estimated tokens',
+      value: `${summary.totalInputTokens} in / ${summary.totalOutputTokens} out`,
+    },
+  ])
+  process.stdout.write('\n')
+  printKeyValueBlock(
+    'By Source',
+    summary.bySource.length
+      ? summary.bySource.map(item => ({
+          label: item.source,
+          value: String(item.runs),
+        }))
+      : [{ label: '(none)', value: '0' }],
+  )
+  process.stdout.write('\n')
+  printKeyValueBlock(
+    'Top Models',
+    summary.byModel.length
+      ? summary.byModel.slice(0, 8).map(item => ({
+          label: item.model,
+          value: `${item.runs} runs / ${formatUsd(item.estimatedCostUsd)}`,
+        }))
+      : [{ label: '(none)', value: '0' }],
+  )
+  process.stdout.write('\n')
+  printKeyValueBlock(
+    'Recent Events',
+    summary.recentEvents.length
+      ? summary.recentEvents.map(event => ({
+          label: `${event.source} ${event.model}`,
+          value: `${event.success ? 'ok' : 'fail'} / ${formatDurationMs(event.durationMs)}`,
+        }))
+      : [{ label: '(none)', value: '' }],
+  )
+  printDivider()
+}
+
+async function printCostSummary(windowDays: number): Promise<void> {
+  const summary = await summarizeUsage(windowDays)
+  printDivider()
+  process.stdout.write(`${label(`RoyCode Cost (${windowDays}d)`)}\n\n`)
+  printKeyValueBlock('Estimated Cost', [
+    { label: 'input tokens', value: String(summary.totalInputTokens) },
+    { label: 'output tokens', value: String(summary.totalOutputTokens) },
+    { label: 'estimated usd', value: formatUsd(summary.totalEstimatedCostUsd) },
+  ])
+  process.stdout.write('\n')
+  printKeyValueBlock(
+    'By Model',
+    summary.byModel.length
+      ? summary.byModel.map(item => ({
+          label: item.model,
+          value: formatUsd(item.estimatedCostUsd),
+        }))
+      : [{ label: '(none)', value: '$0.0000' }],
+  )
+  printDivider()
+}
+
 async function handleBranchCommand(state: CliState, rawArgs: string): Promise<void> {
   await saveCurrentSession(state)
   const sessions = await listCliSessions()
@@ -4103,6 +4356,56 @@ async function handleBriefCommand(state: CliState, rawArgs: string): Promise<voi
   ok(`Brief mode ${nextValue ? 'enabled' : 'disabled'}`)
 }
 
+async function handleSuggestCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+
+  if (!action || action === 'show' || action === 'list') {
+    state.lastSuggestions = buildPromptSuggestions(buildSuggestionContext(state))
+    printSuggestions(state)
+    return
+  }
+
+  if (action === 'status') {
+    info(
+      `Prompt suggestions are ${state.settings.promptSuggestionEnabled === false ? 'off' : 'on'}`,
+    )
+    info(`${state.lastSuggestions.length} cached suggestions`)
+    return
+  }
+
+  if (action === 'run' || action === 'send' || action === 'use') {
+    const index = Number.parseInt(rest.trim(), 10)
+    if (!Number.isFinite(index) || index < 1 || index > state.lastSuggestions.length) {
+      fail('Usage: /suggest run <index>')
+      return
+    }
+    const suggestion = state.lastSuggestions[index - 1] as string
+    info(`Running suggestion ${index}: ${suggestion}`)
+    await runPromptInternal(state, suggestion, {
+      source: 'cli',
+    })
+    return
+  }
+
+  let nextValue: boolean
+  if (action === 'toggle') {
+    nextValue = !(state.settings.promptSuggestionEnabled !== false)
+  } else if (action === 'on' || action === 'enable' || action === 'enabled') {
+    nextValue = true
+  } else if (action === 'off' || action === 'disable' || action === 'disabled') {
+    nextValue = false
+  } else {
+    fail('Usage: /suggest [show|run <index>|on|off|toggle|status]')
+    return
+  }
+
+  await updateSettings(state, settings => ({
+    ...settings,
+    promptSuggestionEnabled: nextValue,
+  }))
+  ok(`Prompt suggestions ${nextValue ? 'enabled' : 'disabled'}`)
+}
+
 async function handleVoiceCommand(state: CliState, rawArgs: string): Promise<void> {
   const support = describeVoiceSupport()
   const { action, rest } = parseCommandTarget(rawArgs)
@@ -4110,6 +4413,8 @@ async function handleVoiceCommand(state: CliState, rawArgs: string): Promise<voi
   if (!action || action === 'status') {
     info(`Voice mode is ${(state.settings.voiceMode ?? false) ? 'on' : 'off'}`)
     info(`Voice backend: ${support.mode}`)
+    info(`Voice input: ${support.inputSupported ? 'supported' : 'unsupported'}`)
+    info(`Voice output: ${support.outputSupported ? 'supported' : 'unsupported'}`)
     return
   }
 
@@ -4123,6 +4428,27 @@ async function handleVoiceCommand(state: CliState, rawArgs: string): Promise<voi
     return
   }
 
+  if (action === 'listen') {
+    const timeout = Number.parseInt(rest.trim() || '8', 10) || 8
+    info(`Listening for up to ${timeout} seconds...`)
+    const result = await listenForSpeech(timeout)
+    printDivider()
+    process.stdout.write(`${label('Voice Input')}\n${result.text}\n`)
+    printDivider()
+    return
+  }
+
+  if (action === 'prompt') {
+    const timeout = Number.parseInt(rest.trim() || '8', 10) || 8
+    info(`Listening for a prompt for up to ${timeout} seconds...`)
+    const result = await listenForSpeech(timeout)
+    ok(`Captured prompt: ${truncate(result.text, 120)}`)
+    await runPromptInternal(state, result.text, {
+      source: 'cli',
+    })
+    return
+  }
+
   let nextValue: boolean
   if (action === 'toggle') {
     nextValue = !(state.settings.voiceMode ?? false)
@@ -4131,7 +4457,7 @@ async function handleVoiceCommand(state: CliState, rawArgs: string): Promise<voi
   } else if (action === 'off' || action === 'disable' || action === 'disabled') {
     nextValue = false
   } else {
-    fail('Usage: /voice <on|off|toggle|status|say <text>>')
+    fail('Usage: /voice <on|off|toggle|status|say <text>|listen [seconds]|prompt [seconds]>')
     return
   }
 
@@ -4151,6 +4477,190 @@ async function handleVoiceCommand(state: CliState, rawArgs: string): Promise<voi
   ok(`Voice mode ${nextValue ? 'enabled' : 'disabled'}`)
 }
 
+async function handleNotificationsCommand(
+  state: CliState,
+  rawArgs: string,
+): Promise<void> {
+  const support = describeNotifierSupport()
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action || action === 'status') {
+    info(
+      `Notifications are ${(state.settings.notificationsEnabled ?? false) ? 'on' : 'off'}`,
+    )
+    info(`Notification backend: ${support.mode}`)
+    return
+  }
+
+  if (action === 'test') {
+    const message = rest || 'RoyCode test notification'
+    await sendLocalNotification('RoyCode', message)
+    ok('Sent a local notification')
+    return
+  }
+
+  let nextValue: boolean
+  if (action === 'toggle') {
+    nextValue = !(state.settings.notificationsEnabled ?? false)
+  } else if (action === 'on' || action === 'enable' || action === 'enabled') {
+    nextValue = true
+  } else if (action === 'off' || action === 'disable' || action === 'disabled') {
+    nextValue = false
+  } else {
+    fail('Usage: /notifications <on|off|toggle|status|test [text]>')
+    return
+  }
+
+  if (nextValue && !support.supported) {
+    fail(`Notifications are not supported on this platform (${support.mode})`)
+    return
+  }
+
+  await updateSettings(state, settings => ({
+    ...settings,
+    notificationsEnabled: nextValue,
+  }))
+  ok(`Notifications ${nextValue ? 'enabled' : 'disabled'}`)
+}
+
+async function handleNotifyCommand(rawArgs: string): Promise<void> {
+  const text = rawArgs.trim()
+  if (!text) {
+    fail('Usage: /notify <text>')
+    return
+  }
+  await sendLocalNotification('RoyCode', text)
+  ok('Sent a local notification')
+}
+
+async function handleSleepGuardCommand(
+  state: CliState,
+  rawArgs: string,
+): Promise<void> {
+  const { action } = parseCommandTarget(rawArgs)
+  if (!action || action === 'status') {
+    const status = await getSleepGuardStatus()
+    info(`Sleep guard is ${status.enabled ? 'on' : 'off'}`)
+    info(`Sleep guard backend: ${status.mode}`)
+    return
+  }
+
+  let nextValue: boolean
+  if (action === 'toggle') {
+    const status = await getSleepGuardStatus()
+    nextValue = !status.enabled
+  } else if (action === 'on' || action === 'enable' || action === 'enabled') {
+    nextValue = true
+  } else if (action === 'off' || action === 'disable' || action === 'disabled') {
+    nextValue = false
+  } else {
+    fail('Usage: /sleep-guard <on|off|toggle|status>')
+    return
+  }
+
+  const status = nextValue ? await enableSleepGuard() : await disableSleepGuard()
+  await updateSettings(state, settings => ({
+    ...settings,
+    sleepGuardMode: nextValue,
+  }))
+  ok(
+    `Sleep guard ${status.enabled ? 'enabled' : 'disabled'} (${status.mode})`,
+  )
+}
+
+async function handleUsageCommand(rawArgs: string): Promise<void> {
+  const windowDays = parseUsageWindowDays(rawArgs)
+  await printUsageSummary(windowDays)
+}
+
+async function handleCostCommand(rawArgs: string): Promise<void> {
+  const windowDays = parseUsageWindowDays(rawArgs)
+  await printCostSummary(windowDays)
+}
+
+async function handleStatsCommand(state: CliState): Promise<void> {
+  await printRuntimeStats(state)
+}
+
+async function handleAdvisorCommand(
+  state: CliState,
+  rawArgs: string,
+): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action || action === 'status') {
+    const advisorModel = state.settings.advisorModel?.trim()
+    if (!advisorModel) {
+      info('Advisor model is not configured')
+    } else {
+      info(`Advisor model: ${advisorModel}`)
+    }
+    info('Usage: /advisor <model>|off|status|review [text]')
+    return
+  }
+
+  if (action === 'off' || action === 'unset' || action === 'disable') {
+    await updateSettings(state, settings => ({
+      ...settings,
+      advisorModel: '',
+    }))
+    ok('Advisor model disabled')
+    return
+  }
+
+  if (action === 'review' || action === 'ask' || action === 'run') {
+    const advisorModel = state.settings.advisorModel?.trim()
+    if (!advisorModel) {
+      fail('Set an advisor model first with /advisor <model>')
+      return
+    }
+    const latestUser = [...state.messages].reverse().find(message => message.role === 'user')
+    const latestAssistant = [...state.messages]
+      .reverse()
+      .find(message => message.role === 'assistant')
+    const reviewTarget =
+      rest.trim() ||
+      [
+        latestUser ? `Latest user request:\n${typeof latestUser.content === 'string' ? latestUser.content : ''}` : '',
+        latestAssistant
+          ? `Latest assistant answer:\n${typeof latestAssistant.content === 'string' ? latestAssistant.content : ''}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n\n')
+
+    if (!reviewTarget) {
+      fail('Usage: /advisor review [text]')
+      return
+    }
+
+    await runPromptInternal(
+      state,
+      `Review the following content as a secondary advisor. Focus on gaps, risks, missed verification, and better next steps.\n\n${reviewTarget}`,
+      {
+        isolated: true,
+        modelOverride: advisorModel,
+        source: 'advisor',
+        extraSystemAddenda: [
+          'You are acting as RoyCode advisor mode.',
+          'Do not use tools unless strictly necessary.',
+          'Give a second-opinion critique that improves the main answer.',
+        ],
+      },
+    )
+    return
+  }
+
+  const nextModel = stripWrappingQuotes(rawArgs).trim()
+  if (!nextModel) {
+    fail('Usage: /advisor <model>|off|status|review [text]')
+    return
+  }
+  await updateSettings(state, settings => ({
+    ...settings,
+    advisorModel: nextModel,
+  }))
+  ok(`Advisor model set to ${nextModel}`)
+}
+
 function renderStatusline(state: CliState): string {
   const provider = getSelectedProvider(state.settings)
   const model = resolveModel(state.settings, provider)
@@ -4163,6 +4673,8 @@ function renderStatusline(state: CliState): string {
     `mode ${describeExecutionMode(state)}`,
     `brief ${(state.settings.briefMode ?? false) ? 'on' : 'off'}`,
     `voice ${(state.settings.voiceMode ?? false) ? 'on' : 'off'}`,
+    `suggest ${state.settings.promptSuggestionEnabled !== false ? 'on' : 'off'}`,
+    `notify ${(state.settings.notificationsEnabled ?? false) ? 'on' : 'off'}`,
     `safe-write ${state.settings.safeWriteMode ? 'on' : 'off'}`,
   ]
   return parts.join(' | ')
@@ -4178,6 +4690,7 @@ function handleKeybindingsCommand(): void {
     { label: 'Ctrl+W', value: '/context' },
     { label: 'Ctrl+G', value: '/git' },
     { label: 'Ctrl+P', value: '/pending' },
+    { label: 'Ctrl+J', value: '/suggest' },
     { label: 'Ctrl+Y', value: '/cron' },
     { label: 'Ctrl+K', value: '/worktree' },
     { label: 'Ctrl+O', value: '/plan-mode status' },
@@ -5874,6 +6387,7 @@ type PromptRunOptions = {
   maxAgentSteps?: number
   prependedPrompt?: string
   extraSkillNames?: string[]
+  source?: UsageSource
 }
 
 async function buildAgentPromptRunOptions(
@@ -5945,8 +6459,10 @@ async function runPromptInternal(
   rawInput: string,
   options: PromptRunOptions = {},
 ): Promise<string | null> {
+  const runStartedAt = Date.now()
   const provider = getSelectedProvider(state.settings)
   const model = options.modelOverride || resolveModel(state.settings, provider)
+  const usageSource = options.source ?? (options.isolated ? 'internal' : 'cli')
   let effectiveRawInput = rawInput
   const compactSystemMessage = buildCompactSystemMessage(state)
   const hookSystemAddenda: string[] = []
@@ -6033,6 +6549,9 @@ async function runPromptInternal(
     })
     state.sessionTouched = true
   }
+
+  const estimatedInputChars =
+    systemAddenda.join('\n\n').length + measureMessageChars(effectiveMessages)
 
   let assistantLineOpen = false
 
@@ -6146,6 +6665,9 @@ async function runPromptInternal(
         content: response.answer,
       })
       state.pendingAttachments = []
+      if (state.settings.promptSuggestionEnabled !== false) {
+        state.lastSuggestions = buildPromptSuggestions(buildSuggestionContext(state))
+      }
       await runHookSafely('after-prompt', state, {
         prompt: effectiveRawInput,
         assistant: response.answer,
@@ -6158,12 +6680,57 @@ async function runPromptInternal(
         }
       }
     }
+
+    const durationMs = Date.now() - runStartedAt
+    await recordUsageEvent({
+      source: usageSource,
+      providerId: provider.id,
+      model,
+      workspaceRoot: state.settings.workspaceRoot,
+      sessionId: options.isolated ? undefined : state.sessionId,
+      success: true,
+      durationMs,
+      toolCalls: response.toolEvents.length,
+      inputChars: estimatedInputChars,
+      outputChars: response.answer.length,
+    })
+
+    if (
+      !options.isolated &&
+      state.settings.notificationsEnabled &&
+      durationMs >= 10_000
+    ) {
+      await sendLocalNotification(
+        'RoyCode prompt finished',
+        truncate(response.answer.replace(/\s+/g, ' '), 180),
+      ).catch(() => undefined)
+    }
+
     return response.answer
   } catch (error) {
     if (assistantLineOpen) {
       process.stdout.write('\n')
     }
     const message = error instanceof Error ? error.message : 'Unknown agent error'
+    const durationMs = Date.now() - runStartedAt
+    await recordUsageEvent({
+      source: usageSource,
+      providerId: provider.id,
+      model,
+      workspaceRoot: state.settings.workspaceRoot,
+      sessionId: options.isolated ? undefined : state.sessionId,
+      success: false,
+      durationMs,
+      toolCalls: 0,
+      inputChars: estimatedInputChars,
+      outputChars: 0,
+      error: message,
+    }).catch(() => undefined)
+    if (!options.isolated && state.settings.notificationsEnabled && durationMs >= 10_000) {
+      await sendLocalNotification('RoyCode prompt failed', truncate(message, 180)).catch(
+        () => undefined,
+      )
+    }
     if (!options.quiet) {
       fail(message)
     }
@@ -6204,6 +6771,15 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'status':
       printStatus(state)
       return true
+    case 'usage':
+      await handleUsageCommand(command.rawArgs)
+      return true
+    case 'cost':
+      await handleCostCommand(command.rawArgs)
+      return true
+    case 'stats':
+      await handleStatsCommand(state)
+      return true
     case 'providers':
       printProviders(state)
       return true
@@ -6225,8 +6801,24 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'brief':
       await handleBriefCommand(state, command.rawArgs)
       return true
+    case 'suggest':
+      await handleSuggestCommand(state, command.rawArgs)
+      return true
     case 'voice':
       await handleVoiceCommand(state, command.rawArgs)
+      return true
+    case 'advisor':
+      await handleAdvisorCommand(state, command.rawArgs)
+      return true
+    case 'notifications':
+      await handleNotificationsCommand(state, command.rawArgs)
+      return true
+    case 'notify':
+      await handleNotifyCommand(command.rawArgs)
+      return true
+    case 'sleep-guard':
+    case 'sleepguard':
+      await handleSleepGuardCommand(state, command.rawArgs)
       return true
     case 'statusline':
       handleStatuslineCommand(state)
@@ -6686,6 +7278,15 @@ async function main(): Promise<void> {
   await applyStartupOptions(state, options, launchDirectory)
   await registerCronWorkspace(state.settings.workspaceRoot)
   await startCronScheduler([state.settings.workspaceRoot])
+  if (state.settings.sleepGuardMode) {
+    await enableSleepGuard().catch(error => {
+      warn(
+        `Sleep guard could not be enabled automatically: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      )
+    })
+  }
 
   try {
     if (options.listSessions) {

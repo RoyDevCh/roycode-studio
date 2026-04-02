@@ -1,8 +1,10 @@
 import process from 'node:process'
 import { streamAgentChat } from './agent.js'
 import { runHook } from './hooks.js'
+import { sendLocalNotification } from './notifier.js'
 import { readSettings } from './store.js'
 import { appendTaskLog, getTask, updateTask } from './tasks.js'
+import { recordUsageEvent } from './usage.js'
 
 function readTaskId(argv: string[]): string {
   for (let index = 0; index < argv.length; index += 1) {
@@ -18,6 +20,7 @@ function readTaskId(argv: string[]): string {
 }
 
 async function main(): Promise<void> {
+  const startedAtMs = Date.now()
   const taskId = readTaskId(process.argv.slice(2))
   const initialTask = await getTask(taskId)
   if (!initialTask) {
@@ -107,6 +110,25 @@ async function main(): Promise<void> {
       result: response.answer,
       error: undefined,
     }))
+    await recordUsageEvent({
+      source: 'task',
+      providerId: provider.id,
+      model: task.model,
+      workspaceRoot: task.workspaceRoot,
+      sessionId: task.id,
+      taskId: task.id,
+      success: true,
+      durationMs: Date.now() - startedAtMs,
+      toolCalls: response.toolEvents.length,
+      inputChars: task.prompt.length,
+      outputChars: response.answer.length,
+    })
+    if (settings.notificationsEnabled) {
+      await sendLocalNotification(
+        `RoyCode task completed: ${task.title}`,
+        response.answer.slice(0, 180),
+      ).catch(() => undefined)
+    }
     await runHook('task-completed', {
       workspaceRoot: task.workspaceRoot,
       cwd: task.cwd,
@@ -135,6 +157,26 @@ async function main(): Promise<void> {
       error: message,
       result: answer || current.result,
     }))
+    await recordUsageEvent({
+      source: 'task',
+      providerId: provider.id,
+      model: task.model,
+      workspaceRoot: task.workspaceRoot,
+      sessionId: task.id,
+      taskId: task.id,
+      success: false,
+      durationMs: Date.now() - startedAtMs,
+      toolCalls: 0,
+      inputChars: task.prompt.length,
+      outputChars: answer.length,
+      error: message,
+    }).catch(() => undefined)
+    if (settings.notificationsEnabled) {
+      await sendLocalNotification(
+        `RoyCode task failed: ${task.title}`,
+        message.slice(0, 180),
+      ).catch(() => undefined)
+    }
     await runHook('task-completed', {
       workspaceRoot: task.workspaceRoot,
       cwd: task.cwd,

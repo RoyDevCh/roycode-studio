@@ -29,6 +29,8 @@ import {
 } from './pendingChanges.js'
 import { createProviderFromPreset, PROVIDER_PRESETS } from './presets.js'
 import { readSettings, toPublicSettings, writeSettings } from './store.js'
+import { enableSleepGuard } from './sleepGuard.js'
+import { summarizeUsage } from './usage.js'
 import type { ProviderConfig, ProviderPresetId } from './types.js'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -101,6 +103,10 @@ const settingsPayloadSchema = z.object({
   vimMode: z.boolean().optional(),
   briefMode: z.boolean().optional(),
   voiceMode: z.boolean().optional(),
+  promptSuggestionEnabled: z.boolean().optional(),
+  notificationsEnabled: z.boolean().optional(),
+  sleepGuardMode: z.boolean().optional(),
+  advisorModel: z.string().optional(),
   outputStyle: z.string().min(1).optional(),
   cleanupPeriodDays: z.number().int().min(1).max(3650).optional(),
   defaultShell: z.enum(['powershell', 'bash']).optional(),
@@ -169,6 +175,20 @@ const gitCommitSchema = z.object({
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true })
+})
+
+app.get('/api/usage', async (req, res, next) => {
+  try {
+    const windowDays = Math.max(
+      1,
+      Math.min(365, Number.parseInt(String(req.query.days ?? '7'), 10) || 7),
+    )
+    res.json({
+      usage: await summarizeUsage(windowDays),
+    })
+  } catch (error) {
+    next(error)
+  }
 })
 
 app.get('/api/settings', async (_req, res, next) => {
@@ -593,6 +613,9 @@ await serveClientIfPresent()
 const startupSettings = await readSettings()
 await registerCronWorkspace(startupSettings.workspaceRoot)
 await startCronScheduler([startupSettings.workspaceRoot])
+if (startupSettings.sleepGuardMode) {
+  await enableSleepGuard().catch(() => undefined)
+}
 
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
