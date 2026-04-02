@@ -187,6 +187,28 @@ import {
   listSupportedConfigEntries,
   setCompatConfigValue,
 } from './configCompat.js'
+import {
+  isFeatureEnabled,
+  listFeatureFlags,
+  resetFeatureFlags,
+  setFeatureFlag,
+  type RoyCodeFeatureFlag,
+} from './featureFlags.js'
+import {
+  applyPolicyProfile,
+  clearPolicyToolMode,
+  getEffectivePolicy,
+  listPolicyProfiles,
+  setPolicyToolMode,
+} from './policy.js'
+import {
+  clearDiagnostics,
+  exportDiagnostics,
+  listDiagnosticEvents,
+  recordDiagnosticEvent,
+  summarizeDiagnostics,
+  type DiagnosticEvent,
+} from './diagnostics.js'
 import { inspectProjectMcpJson,
   addHttpMcpServer,
   addStdioMcpServer,
@@ -212,6 +234,7 @@ import {
   getOutputStyleConfig,
   listAvailableOutputStyles,
 } from './outputStyles.js'
+import { buildEffectiveSystemPrompt } from './systemPrompt.js'
 import { clearSessionTodos, readSessionTodos, writeSessionTodos } from './todos.js'
 import {
   addGitWorktree,
@@ -643,6 +666,203 @@ function getShellEnvOverrides(settings: AppSettings): Record<string, string> {
   return { ...(settings.shellEnv ?? {}) }
 }
 
+function redactTraceValue(
+  value: unknown,
+  privacyMode: AppSettings['privacyMode'] = 'standard',
+): unknown {
+  if (privacyMode !== 'strict') {
+    if (typeof value === 'string') {
+      return value.length > 800 ? `${value.slice(0, 800)}...[truncated]` : value
+    }
+    return value
+  }
+
+  if (typeof value === 'string') {
+    return `${value.slice(0, 80)}${value.length > 80 ? '...[redacted]' : ''}`
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => redactTraceValue(item, privacyMode)).slice(0, 12)
+  }
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        redactTraceValue(item, privacyMode),
+      ]),
+    )
+  }
+  return value
+}
+
+function buildDiagnosticMetadata(
+  state: CliState,
+  metadata: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  if (!state.settings.traceEnabled) {
+    return undefined
+  }
+  return redactTraceValue(metadata, state.settings.privacyMode ?? 'standard') as
+    | Record<string, unknown>
+    | undefined
+}
+
+async function recordCliDiagnostic(
+  state: CliState,
+  input: {
+    kind: 'slash-command' | 'prompt' | 'system'
+    name: string
+    status: 'success' | 'error' | 'blocked'
+    durationMs: number
+    metadata?: Record<string, unknown>
+  },
+): Promise<void> {
+  if (state.settings.diagnosticsEnabled === false) {
+    return
+  }
+  await recordDiagnosticEvent({
+    kind: input.kind,
+    name: input.name,
+    status: input.status,
+    durationMs: input.durationMs,
+    workspaceRoot: state.settings.workspaceRoot,
+    sessionId: input.kind === 'system' ? undefined : state.sessionId,
+    metadata: input.metadata ? buildDiagnosticMetadata(state, input.metadata) : undefined,
+  }).catch(() => undefined)
+}
+
+function getCommandFeatureRequirement(commandName: string): RoyCodeFeatureFlag | null {
+  switch (commandName) {
+    case 'web-search':
+    case 'websearch':
+    case 'web-fetch':
+    case 'webfetch':
+      return 'web-tools'
+    case 'magic-docs':
+    case 'magicdocs':
+    case 'docs':
+      return 'magic-docs'
+    case 'issue':
+    case 'issues':
+    case 'pr-comments':
+    case 'prcomments':
+      return 'github-context'
+    case 'mcp':
+      return 'mcp'
+    case 'agents':
+    case 'agent':
+      return 'subagents'
+    case 'team':
+    case 'teams':
+      return 'teams'
+    case 'worktree':
+    case 'worktrees':
+    case 'teleport':
+    case 'worktree-mode':
+    case 'worktreemode':
+      return 'worktrees'
+    case 'notebook':
+      return 'notebooks'
+    case 'lsp':
+      return 'lsp'
+    case 'voice':
+      return 'voice'
+    case 'diagnostics':
+    case 'trace':
+    case 'debug':
+      return 'diagnostics'
+    case 'bridge':
+    case 'bridges':
+    case 'remote-trigger':
+    case 'remotetrigger':
+      return 'remote-bridges'
+    default:
+      return null
+  }
+}
+
+function getCommandPolicyToolName(
+  commandName: string,
+  rawArgs: string,
+): string | null {
+  const { action } = parseCommandTarget(rawArgs)
+  switch (commandName) {
+    case 'run':
+      return 'run_command'
+    case 'agent':
+      return action === 'run' ? 'run_subagent' : null
+    case 'worktree':
+    case 'worktrees':
+      if (action === 'add') {
+        return 'create_worktree'
+      }
+      if (action === 'remove' || action === 'delete') {
+        return 'remove_worktree'
+      }
+      return null
+    case 'notebook':
+      if (action === 'set') {
+        return 'edit_notebook_cell'
+      }
+      if (action === 'add') {
+        return 'add_notebook_cell'
+      }
+      if (action === 'delete' || action === 'remove') {
+        return 'delete_notebook_cell'
+      }
+      return null
+    case 'team':
+      if (action === 'create') {
+        return 'create_team'
+      }
+      if (action === 'run') {
+        return 'run_team'
+      }
+      if (action === 'task') {
+        return 'create_team_tasks'
+      }
+      if (action === 'message') {
+        return 'send_team_message'
+      }
+      if (action === 'memory' && /^(set|append)\b/i.test(parseCommandTarget(rawArgs).rest)) {
+        return 'set_team_memory'
+      }
+      return null
+    case 'remote-trigger':
+    case 'remotetrigger':
+      return action === 'run' ? 'fire_remote_trigger' : null
+    case 'bridge':
+      return action === 'run' ? 'bridge_run_command' : null
+    case 'marketplace':
+      return action === 'install' ? 'install_marketplace_item' : null
+    default:
+      return null
+  }
+}
+
+function getCommandBlockReason(
+  settings: AppSettings,
+  commandName: string,
+  rawArgs: string,
+): string | null {
+  const requiredFeature = getCommandFeatureRequirement(commandName)
+  if (requiredFeature && !isFeatureEnabled(settings, requiredFeature)) {
+    return `/${commandName} is disabled by feature flag ${requiredFeature}`
+  }
+
+  const policyTool = getCommandPolicyToolName(commandName, rawArgs)
+  if (!policyTool) {
+    return null
+  }
+  const policy = getEffectivePolicy(settings)
+  if (policy.allowedTools.length && !policy.allowedTools.includes(policyTool)) {
+    return `/${commandName} is blocked by the current policy allowlist`
+  }
+  if (policy.blockedTools.includes(policyTool)) {
+    return `/${commandName} is blocked by local policy for tool ${policyTool}`
+  }
+  return null
+}
+
 function maskSecretValue(value: string): string {
   if (!value) {
     return '(empty)'
@@ -694,12 +914,14 @@ function buildPromptLabel(state: CliState): string {
     resolveEffortLevel(state.settings) !== 'auto'
       ? ` ${dim(`[effort:${resolveEffortLevel(state.settings)}]`)}`
       : ''
+  const policySuffix = ` ${dim(`[policy:${state.settings.policyProfile ?? 'balanced'}]`)}`
+  const traceSuffix = state.settings.traceEnabled ? ` ${dim('[trace]')}` : ''
   const suggestSuffix =
     state.settings.promptSuggestionEnabled !== false ? ` ${dim('[suggest]')}` : ''
   const advisorSuffix = state.settings.advisorModel
     ? ` ${dim(`[advisor:${state.settings.advisorModel}]`)}`
     : ''
-  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)}${briefSuffix}${voiceSuffix}${effortSuffix}${suggestSuffix}${advisorSuffix}${modeSuffix} ${cyan('> ')}`
+  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)}${briefSuffix}${voiceSuffix}${effortSuffix}${policySuffix}${traceSuffix}${suggestSuffix}${advisorSuffix}${modeSuffix} ${cyan('> ')}`
 }
 
 function normalizeCommand(input: string): {
@@ -1156,8 +1378,12 @@ function printStatus(state: CliState): void {
       `${label('brief')} ${(state.settings.briefMode ?? false) ? green('on') : red('off')}`,
       `${label('voice')} ${(state.settings.voiceMode ?? false) ? green('on') : red('off')}`,
       `${label('effort')} ${resolveEffortLevel(state.settings)}`,
+      `${label('policy')} ${state.settings.policyProfile ?? 'balanced'}`,
+      `${label('privacy')} ${state.settings.privacyMode ?? 'standard'}`,
       `${label('suggest')} ${state.settings.promptSuggestionEnabled !== false ? green('on') : red('off')}`,
       `${label('notify')} ${(state.settings.notificationsEnabled ?? false) ? green('on') : red('off')}`,
+      `${label('diagnostics')} ${(state.settings.diagnosticsEnabled ?? true) ? green('on') : red('off')}`,
+      `${label('trace')} ${(state.settings.traceEnabled ?? false) ? green('on') : red('off')}`,
       `${label('sleep-guard')} ${(state.settings.sleepGuardMode ?? false) ? green('on') : red('off')}`,
       `${label('safe-write')} ${state.settings.safeWriteMode ? green('on') : red('off')}`,
       `${label('style')} ${state.settings.outputStyle || DEFAULT_OUTPUT_STYLE_NAME}`,
@@ -1170,6 +1396,8 @@ function printStatus(state: CliState): void {
       `${label('summaries')} ${state.compactSummaries.length}`,
       `${label('suggestions')} ${state.lastSuggestions.length}`,
       `${label('env')} ${Object.keys(getShellEnvOverrides(state.settings)).length}`,
+      `${label('flags')} ${listFeatureFlags(state.settings).filter(flag => flag.enabled).length}/${listFeatureFlags(state.settings).length}`,
+      `${label('passes')} ${state.settings.maxAgentSteps}`,
     ].join(` ${dim('|')} `) + '\n',
   )
 }
@@ -1277,6 +1505,13 @@ function printHelp(): void {
       '/brief <on|off|toggle> - toggle concise brief-mode replies',
       '/voice <on|off|toggle|say> - toggle or use local voice output',
       '/effort [auto|low|medium|high|max] - set reasoning depth for future turns',
+      '/passes [show|set <n>] - inspect or adjust the local max-pass / agent-step budget',
+      '/flags [list|enable|disable|reset] - inspect or toggle local feature flags',
+      '/policy [status|list|apply|allow|block|clear] - inspect or apply local policy profiles',
+      '/privacy-settings [standard|strict|status] - control local trace/diagnostic privacy mode',
+      '/diagnostics [summary|recent|export|clear] - inspect or export local diagnostic events',
+      '/trace [on|off|toggle|status|show] - control richer trace metadata capture',
+      '/debug [session|tools|prompt-policy|diagnostics] - inspect local runtime internals',
       '/statusline - print the compact RoyCode status line',
       '/keybindings - print the main TUI keybindings',
       '/version - print RoyCode build and runtime version details',
@@ -1442,6 +1677,8 @@ function printHelp(): void {
       '/usage [today|7d|30d|days] - summarize recent RoyCode runs',
       '/cost [today|7d|30d|days] - estimate recent token cost from local usage logs',
       '/stats - inspect local runtime counts and recent activity',
+      '/rate-limit-options - inspect the current local runtime ceilings and step limits',
+      '/extra-usage [days] - show a more detailed local usage view with top tools and recent errors',
       '/advisor <model>|off|status|review [text] - configure or run a second-opinion advisor model',
       '/suggest [show|run <index>|on|off|toggle|status] - inspect or use local next-prompt suggestions',
       '/notifications <on|off|toggle|status|test [text]> - configure local desktop notifications',
@@ -5513,6 +5750,365 @@ async function handleStatsCommand(state: CliState): Promise<void> {
   await printRuntimeStats(state)
 }
 
+async function handlePassesCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action || action === 'show' || action === 'status') {
+    info(`Current max passes / agent-step budget: ${state.settings.maxAgentSteps}`)
+    return
+  }
+
+  if (action === 'set') {
+    const nextValue = Number.parseInt(rest.trim(), 10)
+    if (!Number.isFinite(nextValue) || nextValue < 1 || nextValue > 32) {
+      fail('Usage: /passes set <1-32>')
+      return
+    }
+    await updateSettings(state, settings => ({
+      ...settings,
+      maxAgentSteps: nextValue,
+    }))
+    ok(`Max passes set to ${nextValue}`)
+    return
+  }
+
+  fail('Usage: /passes [show|set <1-32>]')
+}
+
+async function handleFlagsCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+
+  if (!action || action === 'list' || action === 'show' || action === 'status') {
+    const flags = listFeatureFlags(state.settings)
+    printDivider()
+    process.stdout.write(`${label('Feature Flags')}\n`)
+    for (const flag of flags) {
+      process.stdout.write(
+        `${flag.enabled ? green('on') : red('off')} ${flag.key} ${dim(flag.description)}\n`,
+      )
+    }
+    printDivider()
+    return
+  }
+
+  if (action === 'reset' || action === 'clear') {
+    await updateSettings(state, settings => resetFeatureFlags(settings))
+    ok('Feature flag overrides reset to defaults')
+    return
+  }
+
+  if (action === 'enable' || action === 'disable' || action === 'on' || action === 'off') {
+    const target = rest.trim()
+    if (!target) {
+      fail(`Usage: /flags ${action} <flag>`)
+      return
+    }
+    const enabled = action === 'enable' || action === 'on'
+    await updateSettings(state, settings => setFeatureFlag(settings, target, enabled))
+    ok(`Feature flag ${target} ${enabled ? 'enabled' : 'disabled'}`)
+    return
+  }
+
+  fail('Usage: /flags [list|enable <flag>|disable <flag>|reset]')
+}
+
+async function handlePolicyCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+
+  if (!action || action === 'status') {
+    const policy = getEffectivePolicy(state.settings)
+    printKeyValueBlock('Policy', [
+      { label: 'profile', value: policy.profile },
+      { label: 'description', value: policy.description },
+      { label: 'access', value: state.settings.accessMode },
+      { label: 'safe-write', value: state.settings.safeWriteMode ? 'on' : 'off' },
+      { label: 'allowlist', value: policy.allowedTools.length ? policy.allowedTools.join(', ') : '(none)' },
+      { label: 'blocklist', value: policy.blockedTools.length ? policy.blockedTools.join(', ') : '(none)' },
+    ])
+    return
+  }
+
+  if (action === 'list') {
+    const profiles = listPolicyProfiles()
+    printDivider()
+    process.stdout.write(`${label('Policy Profiles')}\n`)
+    for (const profile of profiles) {
+      process.stdout.write(
+        `- ${profile.key} ${dim(profile.description)} ${dim(`[access=${profile.accessMode} safe-write=${profile.safeWriteMode ? 'on' : 'off'}]`)}\n`,
+      )
+    }
+    printDivider()
+    return
+  }
+
+  if (action === 'apply') {
+    if (!rest.trim()) {
+      fail('Usage: /policy apply <balanced|strict|relaxed>')
+      return
+    }
+    await updateSettings(state, settings => applyPolicyProfile(settings, rest.trim()))
+    ok(`Applied policy profile ${state.settings.policyProfile}`)
+    return
+  }
+
+  if (action === 'allow' || action === 'block') {
+    const tools = tokenizeQuotedArgs(rest)
+      .flatMap(token => token.split(','))
+      .map(token => token.trim())
+      .filter(Boolean)
+    if (!tools.length) {
+      fail(`Usage: /policy ${action} <tool[,tool]>`)
+      return
+    }
+    await updateSettings(state, settings =>
+      setPolicyToolMode(settings, action as 'allow' | 'block', tools),
+    )
+    ok(`Policy ${action} list updated`)
+    return
+  }
+
+  if (action === 'clear') {
+    const target =
+      rest.trim().toLowerCase() === 'allow' || rest.trim().toLowerCase() === 'block'
+        ? (rest.trim().toLowerCase() as 'allow' | 'block')
+        : 'all'
+    await updateSettings(state, settings => clearPolicyToolMode(settings, target))
+    ok(`Cleared policy ${target === 'all' ? 'allow and block' : target} list`)
+    return
+  }
+
+  fail('Usage: /policy [status|list|apply <profile>|allow <tool[,tool]>|block <tool[,tool]>|clear [allow|block|all]]')
+}
+
+async function handlePrivacySettingsCommand(state: CliState, rawArgs: string): Promise<void> {
+  const next = rawArgs.trim().toLowerCase()
+  if (!next || next === 'status' || next === 'show') {
+    info(`Privacy mode: ${state.settings.privacyMode ?? 'standard'}`)
+    return
+  }
+  if (next !== 'standard' && next !== 'strict') {
+    fail('Usage: /privacy-settings [standard|strict|status]')
+    return
+  }
+  await updateSettings(state, settings => ({
+    ...settings,
+    privacyMode: next,
+  }))
+  ok(`Privacy mode set to ${next}`)
+}
+
+function printDiagnosticEvents(events: DiagnosticEvent[]): void {
+  if (!events.length) {
+    info('No diagnostic events recorded')
+    return
+  }
+  for (const event of events) {
+    process.stdout.write(
+      `- [${event.kind}] ${event.name} ${dim(`[${event.status}] ${event.durationMs}ms ${event.timestamp}`)}\n`,
+    )
+    if (event.metadata) {
+      process.stdout.write(`  ${dim(JSON.stringify(event.metadata))}\n`)
+    }
+  }
+}
+
+async function handleDiagnosticsCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action || action === 'summary' || action === 'status') {
+    const days = action === 'summary' ? parseUsageWindowDays(rest) : 7
+    const summary = await summarizeDiagnostics(days)
+    printKeyValueBlock('Diagnostics', [
+      { label: 'window-days', value: String(summary.windowDays) },
+      { label: 'total-events', value: String(summary.totalEvents) },
+      { label: 'by-kind', value: summary.byKind.map(item => `${item.kind}:${item.count}`).join(', ') || '(none)' },
+      { label: 'by-status', value: summary.byStatus.map(item => `${item.status}:${item.count}`).join(', ') || '(none)' },
+      { label: 'top-names', value: summary.byName.slice(0, 5).map(item => `${item.name}:${item.count}`).join(', ') || '(none)' },
+    ])
+    return
+  }
+
+  if (action === 'recent' || action === 'show') {
+    const limit = Number.parseInt(rest.trim(), 10)
+    const events = await listDiagnosticEvents({
+      limit: Number.isFinite(limit) ? limit : 15,
+    })
+    printDivider()
+    process.stdout.write(`${label('Recent Diagnostics')}\n`)
+    printDiagnosticEvents(events)
+    printDivider()
+    return
+  }
+
+  if (action === 'export') {
+    const targetPath = stripWrappingQuotes(rest).trim()
+    if (!targetPath) {
+      fail('Usage: /diagnostics export <path>')
+      return
+    }
+    const result = await exportDiagnostics(targetPath)
+    ok(`Exported ${result.count} diagnostic events to ${result.path}`)
+    return
+  }
+
+  if (action === 'clear' || action === 'reset') {
+    await clearDiagnostics()
+    ok('Cleared local diagnostics store')
+    return
+  }
+
+  fail('Usage: /diagnostics [summary [days]|recent [count]|export <path>|clear]')
+}
+
+async function handleTraceCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action || action === 'status') {
+    info(`Trace is ${(state.settings.traceEnabled ?? false) ? 'on' : 'off'}`)
+    info(`Privacy mode: ${state.settings.privacyMode ?? 'standard'}`)
+    return
+  }
+
+  if (action === 'show') {
+    const limit = Number.parseInt(rest.trim(), 10)
+    const events = await listDiagnosticEvents({
+      limit: Number.isFinite(limit) ? limit : 10,
+    })
+    printDivider()
+    process.stdout.write(`${label('Trace Events')}\n`)
+    printDiagnosticEvents(events.filter(event => Boolean(event.metadata)))
+    printDivider()
+    return
+  }
+
+  let nextValue: boolean
+  if (action === 'toggle') {
+    nextValue = !(state.settings.traceEnabled ?? false)
+  } else if (action === 'on' || action === 'enable') {
+    nextValue = true
+  } else if (action === 'off' || action === 'disable') {
+    nextValue = false
+  } else {
+    fail('Usage: /trace [on|off|toggle|status|show [count]]')
+    return
+  }
+
+  await updateSettings(state, settings => ({
+    ...settings,
+    traceEnabled: nextValue,
+  }))
+  ok(`Trace ${nextValue ? 'enabled' : 'disabled'}`)
+}
+
+async function handleDebugCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action } = parseCommandTarget(rawArgs)
+  if (!action || action === 'session') {
+    const policy = getEffectivePolicy(state.settings)
+    const flags = listFeatureFlags(state.settings)
+    printDivider()
+    process.stdout.write(`${label('Debug Session Snapshot')}\n`)
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          sessionId: state.sessionId,
+          sessionTitle: state.sessionTitle,
+          cwd: state.cwd,
+          executionMode: state.executionMode,
+          workspaceRoot: state.settings.workspaceRoot,
+          policy,
+          privacyMode: state.settings.privacyMode ?? 'standard',
+          traceEnabled: state.settings.traceEnabled ?? false,
+          diagnosticsEnabled: state.settings.diagnosticsEnabled ?? true,
+          flags,
+          activeSkills: state.activeSkills,
+          compactSummaries: state.compactSummaries.length,
+          lastSuggestions: state.lastSuggestions,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    printDivider()
+    return
+  }
+
+  if (action === 'diagnostics') {
+    await handleDiagnosticsCommand(state, 'recent 20')
+    return
+  }
+
+  if (action === 'tools') {
+    const policy = getEffectivePolicy(state.settings)
+    printDivider()
+    process.stdout.write(`${label('Debug Tool Policy')}\n`)
+    process.stdout.write(
+      `${JSON.stringify(
+        {
+          featureFlags: listFeatureFlags(state.settings),
+          allowedTools: policy.allowedTools,
+          blockedTools: policy.blockedTools,
+        },
+        null,
+        2,
+      )}\n`,
+    )
+    printDivider()
+    return
+  }
+
+  if (action === 'prompt-policy' || action === 'prompt') {
+    const provider = getSelectedProvider(state.settings)
+    const prompt = await buildEffectiveSystemPrompt(state.settings, {
+      providerId: provider.id,
+      model: resolveModel(state.settings, provider),
+      sessionId: state.sessionId,
+      cwd: state.cwd,
+      messages: [],
+    })
+    printDivider()
+    process.stdout.write(`${label('Debug Prompt Policy')}\n${prompt}\n`)
+    printDivider()
+    return
+  }
+
+  fail('Usage: /debug [session|tools|prompt-policy|diagnostics]')
+}
+
+async function handleRateLimitOptionsCommand(state: CliState): Promise<void> {
+  printKeyValueBlock('Rate Limit Options', [
+    { label: 'command-timeout-ms', value: String(state.settings.commandTimeoutMs) },
+    { label: 'max-agent-steps', value: String(state.settings.maxAgentSteps) },
+    { label: 'effort', value: resolveEffortLevel(state.settings) },
+    { label: 'policy-profile', value: state.settings.policyProfile ?? 'balanced' },
+  ])
+}
+
+async function handleExtraUsageCommand(rawArgs: string): Promise<void> {
+  const windowDays = parseUsageWindowDays(rawArgs)
+  const summary = await summarizeUsage(windowDays)
+  printDivider()
+  process.stdout.write(`${label('Extra Usage')}\n`)
+  process.stdout.write(
+    JSON.stringify(
+      {
+        windowDays: summary.windowDays,
+        totalRuns: summary.totalRuns,
+        byProvider: summary.byProvider,
+        byModel: summary.byModel,
+        byTool: summary.byTool.slice(0, 15),
+        recentErrors: summary.recentEvents
+          .filter(event => !event.success && event.error)
+          .map(event => ({
+            timestamp: event.timestamp,
+            source: event.source,
+            model: event.model,
+            error: event.error,
+          })),
+      },
+      null,
+      2,
+    ) + '\n',
+  )
+  printDivider()
+}
+
 async function handleAdvisorCommand(
   state: CliState,
   rawArgs: string,
@@ -5663,13 +6259,19 @@ function renderStatusline(state: CliState): string {
     `provider ${provider.id}`,
     `model ${model || 'none'}`,
     `mode ${describeExecutionMode(state)}`,
+    `policy ${state.settings.policyProfile ?? 'balanced'}`,
+    `privacy ${state.settings.privacyMode ?? 'standard'}`,
     `effort ${resolveEffortLevel(state.settings)}`,
     `brief ${(state.settings.briefMode ?? false) ? 'on' : 'off'}`,
     `voice ${(state.settings.voiceMode ?? false) ? 'on' : 'off'}`,
     `suggest ${state.settings.promptSuggestionEnabled !== false ? 'on' : 'off'}`,
     `notify ${(state.settings.notificationsEnabled ?? false) ? 'on' : 'off'}`,
+    `diagnostics ${(state.settings.diagnosticsEnabled ?? true) ? 'on' : 'off'}`,
+    `trace ${(state.settings.traceEnabled ?? false) ? 'on' : 'off'}`,
     `safe-write ${state.settings.safeWriteMode ? 'on' : 'off'}`,
     `env ${Object.keys(getShellEnvOverrides(state.settings)).length}`,
+    `flags ${listFeatureFlags(state.settings).filter(flag => flag.enabled).length}`,
+    `passes ${state.settings.maxAgentSteps}`,
   ]
   return parts.join(' | ')
 }
@@ -6207,6 +6809,8 @@ async function handleMemoryCommand(state: CliState, rawArgs: string): Promise<vo
 }
 
 async function handleContextCommand(state: CliState): Promise<void> {
+  const policy = getEffectivePolicy(state.settings)
+  const flags = listFeatureFlags(state.settings)
   const [
     instructions,
     memory,
@@ -6259,6 +6863,10 @@ async function handleContextCommand(state: CliState): Promise<void> {
       `${label('extra-dirs')} ${getAdditionalWorkspaceRoots(state.settings).length}`,
       `${label('cwd')} ${state.cwd}`,
       `${label('access')} ${state.settings.accessMode}`,
+      `${label('policy')} ${policy.profile}`,
+      `${label('privacy')} ${state.settings.privacyMode ?? 'standard'}`,
+      `${label('diagnostics')} ${(state.settings.diagnosticsEnabled ?? true) ? 'on' : 'off'}`,
+      `${label('trace')} ${(state.settings.traceEnabled ?? false) ? 'on' : 'off'}`,
       `${label('safe-write')} ${state.settings.safeWriteMode ? 'on' : 'off'}`,
       `${label('output-style')} ${
         selectedOutputStyle ? `${selectedOutputStyle.name} [${selectedOutputStyle.source}]` : DEFAULT_OUTPUT_STYLE_NAME
@@ -6275,6 +6883,7 @@ async function handleContextCommand(state: CliState): Promise<void> {
       `${label('docs')} ${docs.length}`,
       `${label('github')} ${githubRepo ? `${githubRepo.owner}/${githubRepo.repo}` : '(none)'}`,
       `${label('shell-env')} ${Object.keys(getShellEnvOverrides(state.settings)).length}`,
+      `${label('flags')} ${flags.filter(flag => flag.enabled).length}/${flags.length}`,
     ].join(` ${dim('|')} `) + '\n\n',
   )
 
@@ -6297,6 +6906,27 @@ async function handleContextCommand(state: CliState): Promise<void> {
     for (const key of envKeys) {
       process.stdout.write(`- ${key}\n`)
     }
+  }
+  process.stdout.write('\n')
+
+  process.stdout.write(`${label('Effective Policy')}\n`)
+  process.stdout.write(`- profile: ${policy.profile}\n`)
+  process.stdout.write(`- description: ${policy.description}\n`)
+  process.stdout.write(`- access: ${state.settings.accessMode}\n`)
+  process.stdout.write(`- safe-write: ${state.settings.safeWriteMode ? 'on' : 'off'}\n`)
+  process.stdout.write(
+    `- allowlist: ${policy.allowedTools.length ? policy.allowedTools.join(', ') : '(none)'}\n`,
+  )
+  process.stdout.write(
+    `- blocklist: ${policy.blockedTools.length ? policy.blockedTools.join(', ') : '(none)'}\n`,
+  )
+  process.stdout.write('\n')
+
+  process.stdout.write(`${label('Feature Flags')}\n`)
+  for (const flag of flags) {
+    process.stdout.write(
+      `- ${flag.key}: ${flag.enabled ? 'on' : 'off'} ${dim(flag.description)}\n`,
+    )
   }
   process.stdout.write('\n')
 
@@ -6388,6 +7018,9 @@ async function handleDoctorCommand(state: CliState): Promise<void> {
   const provider = getSelectedProvider(state.settings)
   const model = resolveModel(state.settings, provider)
   const findings: Array<{ level: 'ok' | 'warn'; message: string }> = []
+  const policy = getEffectivePolicy(state.settings)
+  const flags = listFeatureFlags(state.settings)
+  const disabledFlags = flags.filter(flag => !flag.enabled)
 
   try {
     await buildFileTree(state.settings.workspaceRoot, '.', 0, state.settings.accessMode)
@@ -6510,6 +7143,28 @@ async function handleDoctorCommand(state: CliState): Promise<void> {
   findings.push({
     level: 'ok',
     message: `${Object.keys(getShellEnvOverrides(state.settings)).length} persisted shell env override(s) configured`,
+  })
+  findings.push({
+    level: 'ok',
+    message: `Policy profile ${policy.profile} is active (${policy.description})`,
+  })
+  findings.push({
+    level: 'ok',
+    message: `Privacy mode is ${state.settings.privacyMode ?? 'standard'}`,
+  })
+  findings.push({
+    level: 'ok',
+    message: `Diagnostics are ${(state.settings.diagnosticsEnabled ?? true) ? 'enabled' : 'disabled'}`,
+  })
+  findings.push({
+    level: 'ok',
+    message: `Trace capture is ${(state.settings.traceEnabled ?? false) ? 'enabled' : 'disabled'}`,
+  })
+  findings.push({
+    level: disabledFlags.length ? 'warn' : 'ok',
+    message: disabledFlags.length
+      ? `${disabledFlags.length} feature flag(s) disabled: ${disabledFlags.map(flag => flag.key).join(', ')}`
+      : 'All local feature flags are enabled',
   })
 
   printDivider()
@@ -7637,6 +8292,26 @@ async function runPromptInternal(
   const provider = getSelectedProvider(state.settings)
   const model = options.modelOverride || resolveModel(state.settings, provider)
   const usageSource = options.source ?? (options.isolated ? 'internal' : 'cli')
+  const promptName = usageSource === 'cli' ? 'prompt' : `prompt:${usageSource}`
+  const recordPromptDiagnostic = async (
+    status: 'success' | 'error' | 'blocked',
+    metadata: Record<string, unknown>,
+  ): Promise<void> => {
+    await recordCliDiagnostic(state, {
+      kind: 'prompt',
+      name: promptName,
+      status,
+      durationMs: Date.now() - runStartedAt,
+      metadata: {
+        source: usageSource,
+        providerId: provider.id,
+        model,
+        isolated: options.isolated ?? false,
+        executionMode: state.executionMode,
+        ...metadata,
+      },
+    })
+  }
   let effectiveRawInput = rawInput
   const compactSystemMessage = buildCompactSystemMessage(state)
   const hookSystemAddenda: string[] = []
@@ -7652,6 +8327,11 @@ async function runPromptInternal(
     }
     if (!submitHook.continue) {
       warn(submitHook.stopReason || 'Prompt blocked by hook')
+      await recordPromptDiagnostic('blocked', {
+        stage: 'user-prompt-submit',
+        blockReason: submitHook.stopReason || 'Prompt blocked by hook',
+        inputChars: rawInput.length,
+      })
       return null
     }
     const hookResult = await runHookSafely('before-prompt', state, {
@@ -7665,6 +8345,11 @@ async function runPromptInternal(
     }
     if (!hookResult.continue) {
       warn(hookResult.stopReason || 'Prompt blocked by hook')
+      await recordPromptDiagnostic('blocked', {
+        stage: 'before-prompt',
+        blockReason: hookResult.stopReason || 'Prompt blocked by hook',
+        inputChars: effectiveRawInput.length,
+      })
       return null
     }
   }
@@ -7892,6 +8577,15 @@ async function runPromptInternal(
       ).catch(() => undefined)
     }
 
+    await recordPromptDiagnostic('success', {
+      inputChars: estimatedInputChars,
+      outputChars: response.answer.length,
+      toolCalls: response.toolEvents.length,
+      toolNames: response.toolEvents.map(event => event.name),
+      allowedTools: effectiveAllowedTools,
+      disallowedTools: effectiveDisallowedTools,
+    })
+
     return response.answer
   } catch (error) {
     if (assistantLineOpen) {
@@ -7921,6 +8615,15 @@ async function runPromptInternal(
     if (!options.quiet) {
       fail(message)
     }
+    await recordPromptDiagnostic('error', {
+      inputChars: estimatedInputChars,
+      outputChars: 0,
+      toolCalls: 0,
+      toolNames: [],
+      allowedTools: effectiveAllowedTools,
+      disallowedTools: effectiveDisallowedTools,
+      error: message,
+    })
     return null
   } finally {
     if (!options.isolated) {
@@ -7935,23 +8638,45 @@ async function runPrompt(state: CliState, rawInput: string): Promise<void> {
 
 async function handleSlashCommand(state: CliState, input: string): Promise<boolean> {
   const command = normalizeCommand(input)
-  const slashHook = await runHookSafely('slash-command', state, {
-    commandName: command.name,
-    commandArgs: command.rawArgs,
-  })
-  if (!slashHook.continue) {
-    warn(slashHook.stopReason || `/${command.name} was blocked by a hook`)
-    return true
+  const startedAt = Date.now()
+  let diagnosticStatus: 'success' | 'error' | 'blocked' = 'success'
+  const diagnosticMetadata: Record<string, unknown> = {
+    args: command.rawArgs,
+    cwd: state.cwd,
+    executionMode: state.executionMode,
   }
 
-  if (state.executionMode === 'plan' && isPlanModeWriteCommand(command.name, command.rawArgs)) {
-    warn(
-      `/${command.name} is blocked in plan mode. Use /plan-mode exit before making changes or running mutating commands.`,
-    )
-    return true
-  }
+  try {
+    const slashHook = await runHookSafely('slash-command', state, {
+      commandName: command.name,
+      commandArgs: command.rawArgs,
+    })
+    if (!slashHook.continue) {
+      diagnosticStatus = 'blocked'
+      diagnosticMetadata.blockReason =
+        slashHook.stopReason || `/${command.name} was blocked by a hook`
+      warn(slashHook.stopReason || `/${command.name} was blocked by a hook`)
+      return true
+    }
 
-  switch (command.name) {
+    if (state.executionMode === 'plan' && isPlanModeWriteCommand(command.name, command.rawArgs)) {
+      diagnosticStatus = 'blocked'
+      diagnosticMetadata.blockReason = `/${command.name} is blocked in plan mode`
+      warn(
+        `/${command.name} is blocked in plan mode. Use /plan-mode exit before making changes or running mutating commands.`,
+      )
+      return true
+    }
+
+    const blockReason = getCommandBlockReason(state.settings, command.name, command.rawArgs)
+    if (blockReason) {
+      diagnosticStatus = 'blocked'
+      diagnosticMetadata.blockReason = blockReason
+      warn(blockReason)
+      return true
+    }
+
+    switch (command.name) {
     case 'help':
       printHelp()
       return true
@@ -7966,6 +8691,36 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
       return true
     case 'stats':
       await handleStatsCommand(state)
+      return true
+    case 'passes':
+      await handlePassesCommand(state, command.rawArgs)
+      return true
+    case 'flags':
+      await handleFlagsCommand(state, command.rawArgs)
+      return true
+    case 'policy':
+      await handlePolicyCommand(state, command.rawArgs)
+      return true
+    case 'privacy-settings':
+    case 'privacysettings':
+      await handlePrivacySettingsCommand(state, command.rawArgs)
+      return true
+    case 'diagnostics':
+      await handleDiagnosticsCommand(state, command.rawArgs)
+      return true
+    case 'trace':
+      await handleTraceCommand(state, command.rawArgs)
+      return true
+    case 'debug':
+      await handleDebugCommand(state, command.rawArgs)
+      return true
+    case 'rate-limit-options':
+    case 'ratelimitoptions':
+      await handleRateLimitOptionsCommand(state)
+      return true
+    case 'extra-usage':
+    case 'extrausage':
+      await handleExtraUsageCommand(command.rawArgs)
       return true
     case 'providers':
       printProviders(state)
@@ -8294,9 +9049,24 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
       if (await runCompatibleSlashCommand(state, command.name, command.rawArgs)) {
         return true
       }
+      diagnosticStatus = 'error'
       fail(`Unknown command: /${command.name}`)
       info('Use /help to see the available commands')
       return true
+    }
+  } catch (error) {
+    diagnosticStatus = 'error'
+    diagnosticMetadata.error =
+      error instanceof Error ? error.message : 'Unknown slash command error'
+    throw error
+  } finally {
+    await recordCliDiagnostic(state, {
+      kind: 'slash-command',
+      name: `/${command.name}`,
+      status: diagnosticStatus,
+      durationMs: Date.now() - startedAt,
+      metadata: diagnosticMetadata,
+    })
   }
 }
 

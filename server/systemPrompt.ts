@@ -6,6 +6,8 @@ import { listMcpServers } from './mcp.js'
 import { getOutputStyleConfig } from './outputStyles.js'
 import { listPluginCommands } from './pluginRuntime.js'
 import { listLocalSkills } from './skills.js'
+import { listFeatureFlags } from './featureFlags.js'
+import { getEffectivePolicy } from './policy.js'
 import { loadWorkspaceContext } from './workspaceContext.js'
 
 type PromptSection = {
@@ -26,6 +28,8 @@ function renderSection(entry: PromptSection): string {
 }
 
 function buildToolPolicy(settings: AppSettings): string {
+  const policy = getEffectivePolicy(settings)
+  const disabledFlags = listFeatureFlags(settings).filter(flag => !flag.enabled)
   return [
     '- Read the relevant files before editing them.',
     '- Keep changes minimal and preserve existing style.',
@@ -45,6 +49,20 @@ function buildToolPolicy(settings: AppSettings): string {
       : []),
     '- Prefer local workspace docs before public web search when repository markdown or text documentation is likely to answer the question.',
     '- If the workspace has a GitHub origin, issue and pull-request comment tools can provide project context from discussions and review threads.',
+    `- Active local policy profile: ${policy.profile}. ${policy.description}`,
+    ...(policy.allowedTools.length
+      ? [`- Local policy allowlist is active for these tools: ${policy.allowedTools.join(', ')}.`]
+      : []),
+    ...(policy.blockedTools.length
+      ? [`- Local policy currently blocks these tools: ${policy.blockedTools.join(', ')}.`]
+      : []),
+    ...(disabledFlags.length
+      ? [
+          `- The following local feature flags are disabled and their related capabilities should not be used: ${disabledFlags
+            .map(flag => flag.key)
+            .join(', ')}.`,
+        ]
+      : []),
     ...(Object.keys(settings.shellEnv ?? {}).length
       ? [
           `- Persisted shell environment override keys are available to shell tools: ${Object.keys(settings.shellEnv ?? {}).sort().join(', ')}.`,
@@ -83,6 +101,9 @@ function buildWorkspaceInfo(settings: AppSettings, request: ChatRequest): string
     `Preferred cwd: ${request.cwd ?? '.'}`,
     `Model: ${request.model}`,
     `Output style: ${settings.outputStyle || 'default'}`,
+    `Policy profile: ${settings.policyProfile ?? 'balanced'}`,
+    `Privacy mode: ${settings.privacyMode ?? 'standard'}`,
+    `Trace enabled: ${settings.traceEnabled ? 'yes' : 'no'}`,
     `Shell env override keys: ${
       Object.keys(settings.shellEnv ?? {}).length
         ? Object.keys(settings.shellEnv ?? {}).sort().join(', ')

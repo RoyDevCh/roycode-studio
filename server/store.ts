@@ -34,9 +34,16 @@ function getDefaultSettings(): AppSettings {
     briefMode: false,
     voiceMode: false,
     effortLevel: 'auto',
+    featureFlags: {},
+    policyProfile: 'balanced',
+    policyAllowedTools: [],
+    policyBlockedTools: [],
+    privacyMode: 'standard',
     promptSuggestionEnabled: true,
     notificationsEnabled: false,
     sleepGuardMode: false,
+    diagnosticsEnabled: true,
+    traceEnabled: false,
     advisorModel: '',
     outputStyle: 'default',
     cleanupPeriodDays: 30,
@@ -95,6 +102,32 @@ function normalizeSettings(raw: Partial<AppSettings>): AppSettings {
       raw.effortLevel === 'auto'
         ? raw.effortLevel
         : defaults.effortLevel,
+    featureFlags:
+      raw.featureFlags && typeof raw.featureFlags === 'object' && !Array.isArray(raw.featureFlags)
+        ? Object.fromEntries(
+            Object.entries(raw.featureFlags).flatMap(([key, value]) =>
+              typeof value === 'boolean' && String(key).trim()
+                ? [[String(key).trim(), value]]
+                : [],
+            ),
+          )
+        : defaults.featureFlags,
+    policyProfile:
+      raw.policyProfile === 'balanced' ||
+      raw.policyProfile === 'strict' ||
+      raw.policyProfile === 'relaxed'
+        ? raw.policyProfile
+        : defaults.policyProfile,
+    policyAllowedTools: Array.isArray(raw.policyAllowedTools)
+      ? [...new Set(raw.policyAllowedTools.map(item => String(item).trim()).filter(Boolean))]
+      : defaults.policyAllowedTools,
+    policyBlockedTools: Array.isArray(raw.policyBlockedTools)
+      ? [...new Set(raw.policyBlockedTools.map(item => String(item).trim()).filter(Boolean))]
+      : defaults.policyBlockedTools,
+    privacyMode:
+      raw.privacyMode === 'strict' || raw.privacyMode === 'standard'
+        ? raw.privacyMode
+        : defaults.privacyMode,
     promptSuggestionEnabled:
       typeof raw.promptSuggestionEnabled === 'boolean'
         ? raw.promptSuggestionEnabled
@@ -107,6 +140,14 @@ function normalizeSettings(raw: Partial<AppSettings>): AppSettings {
       typeof raw.sleepGuardMode === 'boolean'
         ? raw.sleepGuardMode
         : defaults.sleepGuardMode,
+    diagnosticsEnabled:
+      typeof raw.diagnosticsEnabled === 'boolean'
+        ? raw.diagnosticsEnabled
+        : defaults.diagnosticsEnabled,
+    traceEnabled:
+      typeof raw.traceEnabled === 'boolean'
+        ? raw.traceEnabled
+        : defaults.traceEnabled,
     advisorModel:
       typeof raw.advisorModel === 'string'
         ? raw.advisorModel

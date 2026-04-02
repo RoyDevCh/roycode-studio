@@ -30,6 +30,7 @@ export type AccessMode = 'workspace' | 'unrestricted'
 export type ExecutionMode = 'default' | 'plan' | 'worktree'
 
 export type EffortLevel = 'auto' | 'low' | 'medium' | 'high' | 'max'
+export type PrivacyMode = 'standard' | 'strict'
 
 export type TodoStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -49,9 +50,16 @@ export type AppSettings = {
   briefMode?: boolean
   voiceMode?: boolean
   effortLevel?: EffortLevel
+  featureFlags?: Record<string, boolean>
+  policyProfile?: 'balanced' | 'strict' | 'relaxed'
+  policyAllowedTools?: string[]
+  policyBlockedTools?: string[]
+  privacyMode?: PrivacyMode
   promptSuggestionEnabled?: boolean
   notificationsEnabled?: boolean
   sleepGuardMode?: boolean
+  diagnosticsEnabled?: boolean
+  traceEnabled?: boolean
   advisorModel?: string
   outputStyle?: string
   cleanupPeriodDays?: number

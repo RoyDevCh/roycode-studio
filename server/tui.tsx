@@ -28,6 +28,10 @@ type StatusSnapshot = {
   dirs?: string
   access?: string
   env?: string
+  policy?: string
+  privacy?: string
+  diagnostics?: string
+  trace?: string
   effort?: string
   theme?: string
   vim?: string
@@ -38,6 +42,8 @@ type StatusSnapshot = {
   advisor?: string
   sleepGuard?: string
   safeWrite?: string
+  flags?: string
+  passes?: string
   style?: string
   provider?: string
   model?: string
@@ -131,6 +137,10 @@ function parseStatusSnapshot(line: string): Partial<StatusSnapshot> | null {
     ['dirs', 'dirs '],
     ['access', 'access '],
     ['env', 'env '],
+    ['policy', 'policy '],
+    ['privacy', 'privacy '],
+    ['diagnostics', 'diagnostics '],
+    ['trace', 'trace '],
     ['effort', 'effort '],
     ['theme', 'theme '],
     ['vim', 'vim '],
@@ -141,6 +151,8 @@ function parseStatusSnapshot(line: string): Partial<StatusSnapshot> | null {
     ['advisor', 'advisor '],
     ['sleepGuard', 'sleep-guard '],
     ['safeWrite', 'safe-write '],
+    ['flags', 'flags '],
+    ['passes', 'passes '],
     ['style', 'style '],
     ['provider', 'provider '],
     ['model', 'model '],
@@ -426,6 +438,10 @@ function RoyCodeTui(): React.ReactElement {
             <Text color="gray">model: {snapshot.model ?? 'unknown'}</Text>
             <Text color="gray">access: {snapshot.access ?? 'unknown'}</Text>
             <Text color="gray">env: {snapshot.env ?? 'unknown'}</Text>
+            <Text color="gray">policy: {snapshot.policy ?? 'unknown'}</Text>
+            <Text color="gray">privacy: {snapshot.privacy ?? 'unknown'}</Text>
+            <Text color="gray">diagnostics: {snapshot.diagnostics ?? 'unknown'}</Text>
+            <Text color="gray">trace: {snapshot.trace ?? 'unknown'}</Text>
             <Text color="gray">effort: {snapshot.effort ?? 'unknown'}</Text>
             <Text color="gray">theme: {snapshot.theme ?? 'unknown'}</Text>
             <Text color="gray">vim: {snapshot.vim ?? 'unknown'}</Text>
@@ -436,6 +452,8 @@ function RoyCodeTui(): React.ReactElement {
             <Text color="gray">advisor: {snapshot.advisor ?? 'unknown'}</Text>
             <Text color="gray">sleep-guard: {snapshot.sleepGuard ?? 'unknown'}</Text>
             <Text color="gray">safe-write: {snapshot.safeWrite ?? 'unknown'}</Text>
+            <Text color="gray">flags: {snapshot.flags ?? 'unknown'}</Text>
+            <Text color="gray">passes: {snapshot.passes ?? 'unknown'}</Text>
             <Text color="gray">mode: {snapshot.mode ?? 'unknown'}</Text>
             <Text color="gray">skills: {snapshot.skills ?? 'unknown'}</Text>
           </Box>

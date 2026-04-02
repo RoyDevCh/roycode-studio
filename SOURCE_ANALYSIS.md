@@ -6,6 +6,8 @@ This snapshot is much closer to a full internal terminal product than to a simpl
 
 It is not a clean public repository, though. The code shape strongly suggests a sourcemap-recovered source snapshot that still expects Anthropic-internal infrastructure, feature flags, private services, and private build assumptions. That is why rebuilding a practical companion app and terminal tool next to it is safer than trying to turn the snapshot itself into a drop-in public release.
 
+At this point, the remaining high-value localizable functionality has largely been extracted into RoyCode. What remains in the snapshot is mostly private cloud infrastructure, internal rollout systems, enterprise-managed policy, and product polish references rather than major missing local runtime capabilities.
+
 ## 1. Entry and Runtime Shape
 
 - `main.tsx` is the real heart of the product, not a thin bootstrap.
@@ -188,6 +190,7 @@ Below is the practical comparison between the recovered Claude Code snapshot and
 | Workspace instructions and memory | Yes | Partially | RoyCode now auto-loads workspace instruction files, agent memory, persistent workspace memory, rules, and output styles, but not the full extraction/consolidation system. |
 | Skills / plugins / MCP | Yes | Partially | RoyCode now has project/user `.claude/skills`, nested `.claude` discovery from the current working directory, project/user `.claude/commands`, project/user `.claude/agents`, bundled source-inspired skills, imported plugin commands, plugin-provided skills, a Claude-style `skill` tool path, and user-configured MCP servers with tool/prompt/resource access, but not the snapshot's official registry/auth ecosystem. |
 | Rules / output styles / project settings | Yes | Partially | RoyCode now supports `.claude/rules`, `.claude/output-styles`, plugin output styles, `outputStyle` config, and project `.mcp.json`; deeper managed settings and enterprise policy layers are still absent. |
+| Local policy / diagnostics / feature flags | Yes | Partially | RoyCode now has local policy profiles, tool allow/block lists, privacy mode, feature flags, trace capture, diagnostics export, and debug/admin-style inspection commands. The missing part is the snapshot's official remote experiment platform, analytics backend, and managed policy services. |
 | Multi-agent task orchestration | Yes | Partially | RoyCode now has project/user `.claude/agents`, `run_subagent`, background tasks, task update/stop/restart/output flows, and agent task tools, but not the snapshot's full teammate/subagent platform. |
 | Team runtime | Yes | Partially | RoyCode now has local teams, member management, team-run workflows, and per-member background task fan-out, but not the snapshot's full teammate platform or remote orchestration layer. |
 | Worktree workflow | Yes | Partially | RoyCode now supports local git worktree listing, inspection, creation, removal, switching, and teleport-style workspace switching, but not the snapshot's full managed isolation model. |
@@ -210,6 +213,7 @@ What can be rebuilt locally:
 - Claude-style `-p/--print` execution plus project/user `.claude/skills`, `.claude/commands`, `.claude/rules`, `.claude/output-styles`, and agent-memory compatibility
 - install/runtime inspection commands such as local `version`, `release-notes`, and `upgrade status/run`
 - extra working-directory and shell-environment controls that keep local terminal flows flexible without forcing fully unrestricted mode
+- local policy profiles, feature flags, diagnostics, trace capture, and debug/admin terminal commands
 - GitHub issue and PR discussion inspection for the current origin repo
 - local repository documentation discovery and search
 - Claude-style project/user `.claude/agents` compatibility and current-directory nested `.claude` discovery
@@ -241,7 +245,7 @@ What can be rebuilt locally:
 What cannot be fully rebuilt from this snapshot alone:
 
 - Anthropic internal auth and policy services
-- private feature-flagged modes
+- private feature-flagged modes and remote experiment rollout
 - closed remote infrastructure
 - exact official terminal UI behavior and hidden product logic
 

@@ -82,6 +82,8 @@ import {
   listSupportedConfigEntries,
   setCompatConfigValue,
 } from './configCompat.js'
+import { isToolEnabledByFeatureFlags } from './featureFlags.js'
+import { isToolAllowedByPolicy } from './policy.js'
 import { buildEffectiveSystemPrompt } from './systemPrompt.js'
 import { webFetch, webSearch } from './web.js'
 import {
@@ -1634,6 +1636,7 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
 ]
 
 function buildAvailableToolDefinitions(
+  settings: AppSettings,
   request: ChatRequest,
 ): FunctionToolDefinition[] {
   const allowed = request.allowedTools?.length
@@ -1645,6 +1648,12 @@ function buildAvailableToolDefinitions(
 
   return TOOL_DEFINITIONS.filter(tool => {
     const toolName = tool.function.name
+    if (!isToolEnabledByFeatureFlags(settings, toolName)) {
+      return false
+    }
+    if (!isToolAllowedByPolicy(settings, toolName)) {
+      return false
+    }
     if (allowed && !allowed.has(toolName)) {
       return false
     }
@@ -1944,6 +1953,13 @@ async function executeTool(
 ): Promise<string> {
   const accessMode = settings.accessMode
 
+  if (!isToolEnabledByFeatureFlags(settings, toolName)) {
+    throw new Error(`Tool disabled by local feature flags: ${toolName}`)
+  }
+  if (!isToolAllowedByPolicy(settings, toolName)) {
+    throw new Error(`Tool blocked by local policy: ${toolName}`)
+  }
+
   switch (toolName) {
     case 'list_files': {
       const tree = await buildFileTree(
@@ -2061,7 +2077,7 @@ async function executeTool(
     }
     case 'tool_search': {
       const query = String(input.query ?? '').trim().toLowerCase()
-      const results = TOOL_DEFINITIONS.filter(tool => {
+      const results = buildAvailableToolDefinitions(settings, request).filter(tool => {
         if (!query) {
           return true
         }
@@ -3178,7 +3194,7 @@ async function runAgentChatInternal(
 
   const workspaceRoot = settings.workspaceRoot
   const systemPrompt = await buildEffectiveSystemPrompt(settings, request)
-  const availableToolDefinitions = buildAvailableToolDefinitions(request)
+  const availableToolDefinitions = buildAvailableToolDefinitions(settings, request)
 
   const conversation: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [{ role: 'system', content: systemPrompt }]
 

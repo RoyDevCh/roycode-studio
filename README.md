@@ -67,6 +67,7 @@ Further reading:
 - RoyCode CLI now supports local notifications and a sleep-guard toggle for long-running workflows
 - RoyCode voice support now includes local Windows speech-to-text capture for dictated prompts
 - RoyCode CLI now supports Claude-style session helper commands such as `/session`, `/statusline`, and `/keybindings`
+- RoyCode CLI now includes a local control plane for feature flags, policy profiles, privacy mode, diagnostics, trace capture, extra usage inspection, and debug/admin-style terminal commands
 - RoyCode background tasks now support output inspection, prompt updates, cancellation, and restart flows from both the CLI and the shared agent tools
 - RoyCode teams now support per-member inbox messages, shared team memory, memory sync from recent team messages, and secret scanning before memory writes
 - RoyCode now supports local settings bundle export/import so a machine can sync non-secret or redacted runtime setup through `/settings-sync`

@@ -471,6 +471,37 @@ These are local runtime summaries built from `data/usage.json`. They are useful 
 
 The advisor model acts as a second-opinion pass. It is local to your current RoyCode settings and uses your configured provider backend.
 
+## 16.5. Local Policy, Flags, and Diagnostics
+
+```bash
+/flags
+/flags enable <flag>
+/flags disable <flag>
+/flags reset
+/policy status
+/policy list
+/policy apply <balanced|strict|relaxed>
+/policy allow <tool[,tool]>
+/policy block <tool[,tool]>
+/policy clear [allow|block|all]
+/privacy-settings [standard|strict|status]
+/passes [show|set <1-32>]
+/diagnostics [summary [days]|recent [count]|export <path>|clear]
+/trace [on|off|toggle|status|show [count]]
+/debug [session|tools|prompt-policy|diagnostics]
+/rate-limit-options
+/extra-usage [days]
+```
+
+Use these commands when you want RoyCode to behave more like a locally managed platform instead of a plain chat CLI.
+
+- `/flags` turns local capability groups on or off without editing code.
+- `/policy` applies a reusable local runtime profile and optional tool allow/block lists.
+- `/privacy-settings` controls how much trace metadata is retained when trace is enabled.
+- `/passes` changes the local agent-step budget.
+- `/diagnostics` and `/trace` inspect the local diagnostic event store in `data/diagnostics.json`.
+- `/debug` exposes session, tool-policy, and prompt-policy snapshots for troubleshooting.
+
 ## 17. Voice, Notifications, and Sleep Guard
 
 ### Voice

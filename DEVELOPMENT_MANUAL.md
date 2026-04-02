@@ -494,6 +494,39 @@ Local heuristic next-prompt suggestion layer used by:
 - `/suggest`
 - TUI shortcut flow
 
+### `server/featureFlags.ts`
+
+Local feature-flag registry for RoyCode runtime capabilities.
+
+Responsibilities:
+
+- define supported local flags
+- resolve aliases and defaults
+- expose CLI-visible feature state
+- gate agent tool families by local flag
+
+### `server/policy.ts`
+
+Local policy profile layer for workspace safety and tool gating.
+
+Responsibilities:
+
+- define reusable profiles such as `balanced`, `strict`, and `relaxed`
+- apply access-mode and safe-write defaults
+- maintain local allow/block lists for tool names
+- expose effective policy state to CLI, TUI, and system prompt composition
+
+### `server/diagnostics.ts`
+
+Local diagnostics and trace event store.
+
+Responsibilities:
+
+- append diagnostic events
+- summarize recent slash-command and prompt activity
+- export trace logs for debugging
+- clear local diagnostic history
+
 ## 14.5. Runtime Settings Beyond The Basic UI
 
 RoyCode stores CLI-oriented runtime flags in the same persisted settings layer as WebUI settings.
@@ -503,6 +536,13 @@ Current examples:
 - `effortLevel`
 - `additionalWorkspaceRoots`
 - `shellEnv`
+- `policyProfile`
+- `policyAllowedTools`
+- `policyBlockedTools`
+- `privacyMode`
+- `diagnosticsEnabled`
+- `traceEnabled`
+- `featureFlags`
 - `promptSuggestionEnabled`
 - `notificationsEnabled`
 - `sleepGuardMode`
@@ -536,6 +576,7 @@ Important files:
 - `teams.json` - teams, team inbox, team memory
 - `workspace-memory/` - persistent workspace memory
 - `usage.json` - local usage events
+- `diagnostics.json` - local slash-command and prompt diagnostics
 - `sleep-guard.json` - current sleep guard pid state
 - `settings-sync/` - exported settings bundles when generated locally
 
@@ -633,10 +674,14 @@ Current surfaced fields include:
 - access mode
 - safe-write mode
 - plan/worktree mode
+- policy/privacy mode
 - theme
 - vim mode
 - effort level
 - shell env override count
+- diagnostics/trace status
+- enabled feature flag count
+- max pass budget
 
 If you add a new surfaced field:
 
@@ -707,7 +752,7 @@ These areas are intentionally local approximations, not official parity:
 - official Anthropic auth/OAuth flows
 - official hosted registry/marketplace
 - official remote bridge cloud layer
-- internal feature flags
+- official remote feature-flag and experiment services
 - enterprise-managed settings services
 
 Treat RoyCode as:

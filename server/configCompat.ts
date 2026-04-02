@@ -164,6 +164,64 @@ const CONFIG_HANDLERS: ConfigHandler[] = [
     },
   },
   {
+    key: 'policy.profile',
+    description: 'Local RoyCode policy profile: balanced, strict, or relaxed.',
+    type: 'enum',
+    options: ['balanced', 'strict', 'relaxed'],
+    aliases: ['policyProfile'],
+    get: settings => settings.policyProfile ?? 'balanced',
+    set: (settings, value) => {
+      const normalized = String(value).trim().toLowerCase()
+      if (!['balanced', 'strict', 'relaxed'].includes(normalized)) {
+        throw new Error('policy.profile must be balanced, strict, or relaxed')
+      }
+      return { ...settings, policyProfile: normalized as AppSettings['policyProfile'] }
+    },
+  },
+  {
+    key: 'policy.allowedTools',
+    description: 'Comma-separated local tool allowlist enforced by policy.',
+    type: 'string',
+    aliases: ['policyAllowedTools'],
+    get: settings => (settings.policyAllowedTools ?? []).join(', '),
+    set: (settings, value) => ({
+      ...settings,
+      policyAllowedTools: String(value)
+        .split(/[\n,;]/)
+        .map(item => item.trim())
+        .filter(Boolean),
+    }),
+  },
+  {
+    key: 'policy.blockedTools',
+    description: 'Comma-separated local tool blocklist enforced by policy.',
+    type: 'string',
+    aliases: ['policyBlockedTools'],
+    get: settings => (settings.policyBlockedTools ?? []).join(', '),
+    set: (settings, value) => ({
+      ...settings,
+      policyBlockedTools: String(value)
+        .split(/[\n,;]/)
+        .map(item => item.trim())
+        .filter(Boolean),
+    }),
+  },
+  {
+    key: 'privacyMode',
+    description: 'Local privacy mode for diagnostics and trace detail handling.',
+    type: 'enum',
+    options: ['standard', 'strict'],
+    aliases: ['privacy', 'privacy.mode'],
+    get: settings => settings.privacyMode ?? 'standard',
+    set: (settings, value) => {
+      const normalized = String(value).trim().toLowerCase()
+      if (normalized !== 'standard' && normalized !== 'strict') {
+        throw new Error('privacyMode must be standard or strict')
+      }
+      return { ...settings, privacyMode: normalized as AppSettings['privacyMode'] }
+    },
+  },
+  {
     key: 'promptSuggestionEnabled',
     description: 'Whether RoyCode should offer local next-prompt suggestions.',
     type: 'boolean',
@@ -172,6 +230,28 @@ const CONFIG_HANDLERS: ConfigHandler[] = [
     set: (settings, value) => ({
       ...settings,
       promptSuggestionEnabled: parseBooleanLike(value),
+    }),
+  },
+  {
+    key: 'diagnosticsEnabled',
+    description: 'Whether RoyCode should record local diagnostics events.',
+    type: 'boolean',
+    aliases: ['diagnostics', 'debug.diagnostics'],
+    get: settings => settings.diagnosticsEnabled ?? true,
+    set: (settings, value) => ({
+      ...settings,
+      diagnosticsEnabled: parseBooleanLike(value),
+    }),
+  },
+  {
+    key: 'traceEnabled',
+    description: 'Whether RoyCode should include richer trace metadata in diagnostics events.',
+    type: 'boolean',
+    aliases: ['trace', 'debug.trace'],
+    get: settings => settings.traceEnabled ?? false,
+    set: (settings, value) => ({
+      ...settings,
+      traceEnabled: parseBooleanLike(value),
     }),
   },
   {
