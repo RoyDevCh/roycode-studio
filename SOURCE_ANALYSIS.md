@@ -213,6 +213,9 @@ What can be rebuilt locally:
 - user-configured MCP servers over stdio or Streamable HTTP
 - self-hosted bridge endpoints between RoyCode servers over HTTP
 - self-hosted marketplace entries for local skills and plugins from paths or git URLs
+- local brief/voice preferences, statusline helpers, and keybinding surfacing in the TUI/CLI shell
+- local team inbox messages and team memory sync built on top of the task/subagent runtime
+- local browser helpers, remote HTTP triggers, and portable settings bundle export/import
 - local worktree workflows
 - local notebook cell editing
 - local TypeScript/JavaScript code intelligence
@@ -223,6 +226,7 @@ What can be rebuilt locally:
 - Git-aware coding flows
 - model/provider abstraction
 - current-info workflows through web search and fetch
+- workspace memory extraction and richer local session analysis helpers
 
 What cannot be fully rebuilt from this snapshot alone:
 

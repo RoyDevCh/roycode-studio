@@ -19,6 +19,7 @@ data/plugins.json
 data/bridges.json
 data/marketplace.json
 data/teams.json
+data/remote-triggers.json
 **/.claude/scheduled_tasks.json
 tmp-smoke*
 tmp-market-*

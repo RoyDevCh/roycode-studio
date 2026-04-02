@@ -25,12 +25,29 @@ export type LocalTeam = {
   updatedAt: string
 }
 
+export type LocalTeamMessage = {
+  id: string
+  teamName: string
+  from: string
+  to: string
+  content: string
+  createdAt: string
+}
+
+export type LocalTeamMemory = {
+  teamName: string
+  content: string
+  updatedAt: string
+}
+
 type TeamStore = {
   teams: LocalTeam[]
+  messages: LocalTeamMessage[]
+  memories: LocalTeamMemory[]
 }
 
 function createStore(): TeamStore {
-  return { teams: [] }
+  return { teams: [], messages: [], memories: [] }
 }
 
 function normalizeName(value: string): string {
@@ -61,6 +78,8 @@ async function readStore(): Promise<TeamStore> {
   const parsed = JSON.parse(raw.replace(/^\uFEFF/, '')) as Partial<TeamStore>
   return {
     teams: Array.isArray(parsed.teams) ? parsed.teams : [],
+    messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+    memories: Array.isArray(parsed.memories) ? parsed.memories : [],
   }
 }
 
@@ -135,6 +154,8 @@ export async function removeTeam(reference: string): Promise<void> {
   const store = await readStore()
   const normalized = normalizeName(reference)
   store.teams = store.teams.filter(team => team.name !== normalized)
+  store.messages = store.messages.filter(message => message.teamName !== normalized)
+  store.memories = store.memories.filter(memory => memory.teamName !== normalized)
   await writeStore(store)
 }
 
@@ -166,4 +187,151 @@ export async function removeTeamMember(
     ...team,
     members: team.members.filter(member => member.name !== normalizedMember),
   }))
+}
+
+export async function listTeamMessages(
+  reference: string,
+  memberName?: string,
+): Promise<LocalTeamMessage[]> {
+  const store = await readStore()
+  const team = await getTeam(reference)
+  if (!team) {
+    throw new Error(`Team not found: ${reference}`)
+  }
+  const normalizedMember = memberName ? normalizeName(memberName) : null
+  return store.messages
+    .filter(message => {
+      if (message.teamName !== team.name) {
+        return false
+      }
+      if (!normalizedMember) {
+        return true
+      }
+      return (
+        message.to === 'all' ||
+        message.to === normalizedMember ||
+        message.from === normalizedMember
+      )
+    })
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+}
+
+export async function sendTeamMessage(args: {
+  team: string
+  from: string
+  to?: string
+  content: string
+}): Promise<LocalTeamMessage> {
+  const store = await readStore()
+  const team = await getTeam(args.team)
+  if (!team) {
+    throw new Error(`Team not found: ${args.team}`)
+  }
+
+  const now = new Date().toISOString()
+  const next: LocalTeamMessage = {
+    id: `teammsg_${Date.now().toString(36)}`,
+    teamName: team.name,
+    from: normalizeName(args.from),
+    to: args.to ? normalizeName(args.to) : 'all',
+    content: args.content.trim(),
+    createdAt: now,
+  }
+  store.messages.push(next)
+  await writeStore(store)
+  return next
+}
+
+export async function clearTeamMessages(
+  reference: string,
+  memberName?: string,
+): Promise<number> {
+  const store = await readStore()
+  const team = await getTeam(reference)
+  if (!team) {
+    throw new Error(`Team not found: ${reference}`)
+  }
+
+  const before = store.messages.length
+  const normalizedMember = memberName ? normalizeName(memberName) : null
+  store.messages = store.messages.filter(message => {
+    if (message.teamName !== team.name) {
+      return true
+    }
+    if (!normalizedMember) {
+      return false
+    }
+    return !(
+      message.to === 'all' ||
+      message.to === normalizedMember ||
+      message.from === normalizedMember
+    )
+  })
+  await writeStore(store)
+  return before - store.messages.length
+}
+
+export async function getTeamMemory(reference: string): Promise<LocalTeamMemory | null> {
+  const store = await readStore()
+  const team = await getTeam(reference)
+  if (!team) {
+    throw new Error(`Team not found: ${reference}`)
+  }
+  return store.memories.find(memory => memory.teamName === team.name) ?? null
+}
+
+export async function setTeamMemory(
+  reference: string,
+  content: string,
+): Promise<LocalTeamMemory> {
+  const store = await readStore()
+  const team = await getTeam(reference)
+  if (!team) {
+    throw new Error(`Team not found: ${reference}`)
+  }
+  const next: LocalTeamMemory = {
+    teamName: team.name,
+    content: content.trim(),
+    updatedAt: new Date().toISOString(),
+  }
+  const index = store.memories.findIndex(memory => memory.teamName === team.name)
+  if (index >= 0) {
+    store.memories[index] = next
+  } else {
+    store.memories.push(next)
+  }
+  await writeStore(store)
+  return next
+}
+
+export async function appendTeamMemory(
+  reference: string,
+  content: string,
+): Promise<LocalTeamMemory> {
+  const current = await getTeamMemory(reference)
+  return setTeamMemory(
+    reference,
+    [current?.content?.trim(), content.trim()].filter(Boolean).join('\n\n'),
+  )
+}
+
+export async function syncTeamMemoryFromMessages(reference: string): Promise<LocalTeamMemory> {
+  const team = await getTeam(reference)
+  if (!team) {
+    throw new Error(`Team not found: ${reference}`)
+  }
+  const messages = await listTeamMessages(team.name)
+  const recent = messages.slice(-20)
+  const summary = [
+    `# Team Memory: ${team.name}`,
+    team.description ? `Description: ${team.description}` : '',
+    recent.length ? 'Recent message highlights:' : 'No team messages yet.',
+    ...recent.map(
+      message =>
+        `- [${message.createdAt}] ${message.from} -> ${message.to}: ${message.content.replace(/\s+/g, ' ')}`,
+    ),
+  ]
+    .filter(Boolean)
+    .join('\n')
+  return setTeamMemory(team.name, summary)
 }

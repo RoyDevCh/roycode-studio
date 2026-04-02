@@ -51,7 +51,15 @@ RoyCode Studio is a personal WebUI coding workspace built next to the Claude Cod
 - RoyCode CLI now supports Claude-style conversation workflow commands such as `/compact`, `/rewind`, and `/export`
 - RoyCode CLI now also supports conversation branching, session summaries, and local history insights through `/branch`, `/summary`, `/thinkback`, and `/insights`
 - RoyCode CLI now supports local theme and vim-mode preferences through `/theme` and `/vim`
+- RoyCode CLI now supports local brief-mode and voice-mode preferences through `/brief` and `/voice`
+- RoyCode CLI now supports Claude-style session helper commands such as `/session`, `/statusline`, and `/keybindings`
 - RoyCode background tasks now support output inspection, prompt updates, cancellation, and restart flows from both the CLI and the shared agent tools
+- RoyCode teams now support per-member inbox messages, shared team memory, and memory sync from recent team messages
+- RoyCode now supports local settings bundle export/import so a machine can sync non-secret or redacted runtime setup through `/settings-sync`
+- RoyCode now supports local remote triggers that can hit saved HTTP endpoints from the CLI or the shared agent
+- RoyCode now supports local browser helpers through `/chrome open`, `/chrome search`, and `/chrome review`
+- RoyCode now supports workspace memory extraction through `/memory extract`
+- RoyCode now includes a simple local text-to-speech voice helper on Windows when voice mode is enabled
 - RoyCode hooks now accept JSON stdin and structured JSON stdout so hooks can emit `systemMessage`, block execution, attach extra context, mutate prompt input, and filter by matcher text or regex more like Claude Code hooks
 - Sidebar project rail for quick workspace switching, with a chat list that behaves more like a project tree + session tree
 - Project rail now supports search, favorites, and recent-project grouping
@@ -297,6 +305,11 @@ Useful CLI flows:
 /compact
 /rewind 1
 /export clipboard
+/session info
+/statusline
+/keybindings
+/brief toggle
+/voice on
 /skill use code-review
 /plugins
 /plugin import "C:\\path\\to\\plugin-dir"
@@ -304,6 +317,7 @@ Useful CLI flows:
 /my-plugin:review auth module
 /memory
 /memory append "The main build command is npm run build"
+/memory extract
 /instructions
 /mcp add-stdio smoke node dist-server/mcp-smoke-server.js
 /mcp tools smoke
@@ -326,6 +340,13 @@ Useful CLI flows:
 /lsp rename-apply src/index.ts 10 5 RenamedSymbol
 /lsp workspace-symbols handler
 /team create reviewers reviewer,security
+/team message reviewers reviewer security "Check auth edge cases"
+/team inbox reviewers security
+/team memory reviewers sync
+/chrome search "TypeScript language service rename API"
+/remote-trigger add smoke https://example.com POST
+/remote-trigger
+/settings-sync export "C:\\temp\\roycode-sync.json" --redact-secrets
 /team task reviewers "Audit the current auth changes"
 /bridge add local http://127.0.0.1:8787
 /marketplace add smoke-skill auto "C:\\path\\to\\skill"
@@ -351,6 +372,14 @@ Claude-style compatibility notes:
 - Built-in bundled skills are auto-seeded into `personal-webui/data/skills/` the first time RoyCode loads local skills
 - Nested skill and command names resolve with `namespace:child` style names
 - Nested project `.claude/skills`, `.claude/commands`, `.claude/agents`, `.claude/rules`, and `.claude/output-styles` are discovered from the current `cwd` back up to the workspace root
+
+Settings sync and local trigger notes:
+
+- `/settings-sync export <path>` writes a portable bundle of local RoyCode settings, hooks, teams, bridges, marketplace entries, MCP servers, plugins, and local skills/plugins
+- Add `--redact-secrets` when exporting bundles you plan to copy to another machine or share with someone else
+- `/settings-sync import <path>` restores the bundle into the local RoyCode data directory while preserving existing provider API keys when the imported bundle contains redacted values
+- `/remote-trigger add <name> <url> [method]` stores a reusable HTTP trigger that can later be fired from the CLI or by the shared agent
+- `/chrome open <url>`, `/chrome search <query>`, and `/chrome review <url>` use the default system browser; they are lightweight local helpers, not a built-in browser engine
 
 Local MCP smoke server for testing:
 

@@ -101,8 +101,17 @@ import {
 import {
   createTeam,
   getTeam,
+  getTeamMemory,
   listTeams,
+  listTeamMessages,
+  sendTeamMessage,
+  setTeamMemory,
+  syncTeamMemoryFromMessages,
 } from './teams.js'
+import {
+  fireRemoteTrigger,
+  listRemoteTriggers,
+} from './remoteTriggers.js'
 import { readSessionTodos, writeSessionTodos } from './todos.js'
 import {
   addGitWorktree,
@@ -1195,6 +1204,81 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'list_team_messages',
+      description: 'List local team messages for a team or one member inbox.',
+      parameters: {
+        type: 'object',
+        properties: {
+          team: { type: 'string', description: 'Team name.' },
+          member: { type: 'string', description: 'Optional member filter.' },
+        },
+        required: ['team'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'send_team_message',
+      description: 'Send a local message into a RoyCode team inbox.',
+      parameters: {
+        type: 'object',
+        properties: {
+          team: { type: 'string', description: 'Team name.' },
+          from: { type: 'string', description: 'Sender member or role.' },
+          to: { type: 'string', description: 'Recipient member or "all".' },
+          content: { type: 'string', description: 'Message body.' },
+        },
+        required: ['team', 'from', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_team_memory',
+      description: 'Read the stored local team memory for a RoyCode team.',
+      parameters: {
+        type: 'object',
+        properties: {
+          team: { type: 'string', description: 'Team name.' },
+        },
+        required: ['team'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_team_memory',
+      description: 'Replace the stored local team memory for a RoyCode team.',
+      parameters: {
+        type: 'object',
+        properties: {
+          team: { type: 'string', description: 'Team name.' },
+          content: { type: 'string', description: 'New team memory text.' },
+        },
+        required: ['team', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'sync_team_memory',
+      description: 'Rebuild local team memory from recent stored team messages.',
+      parameters: {
+        type: 'object',
+        properties: {
+          team: { type: 'string', description: 'Team name.' },
+        },
+        required: ['team'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'list_bridges',
       description: 'List configured remote RoyCode bridge endpoints.',
       parameters: { type: 'object', properties: {} },
@@ -1241,6 +1325,32 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
           cwd: { type: 'string', description: 'Optional remote working directory.' },
         },
         required: ['name', 'command'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_remote_triggers',
+      description: 'List saved local remote triggers that can call external webhooks or services.',
+      parameters: { type: 'object', properties: {} },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fire_remote_trigger',
+      description: 'Fire one saved local remote trigger with an optional JSON payload.',
+      parameters: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', description: 'Remote trigger name.' },
+          payload: {
+            type: 'object',
+            description: 'Optional JSON payload to send.',
+          },
+        },
+        required: ['name'],
       },
     },
   },
@@ -2537,15 +2647,24 @@ async function executeTool(
       if (!team) {
         throw new Error(`Team not found: ${String(input.team ?? '')}`)
       }
+      const teamMemory = await getTeamMemory(team.name)
       const memberResults = []
       for (const member of team.members) {
         const localAgent = member.agentName
           ? await getLocalAgent(member.agentName, workspaceRoot, request.cwd ?? '.')
           : null
+        const teamMessages = await listTeamMessages(team.name, member.name)
         const memberPrompt = [
           member.rolePrompt ? `Role: ${member.rolePrompt}` : '',
           `Team: ${team.name}`,
           `Member: ${member.name}`,
+          teamMemory?.content ? `Team memory:\n${teamMemory.content}` : '',
+          teamMessages.length
+            ? `Team inbox:\n${teamMessages
+                .slice(-8)
+                .map(message => `- [${message.createdAt}] ${message.from} -> ${message.to}: ${message.content}`)
+                .join('\n')}`
+            : '',
           String(input.prompt ?? ''),
         ]
           .filter(Boolean)
@@ -2574,15 +2693,24 @@ async function executeTool(
       if (!team) {
         throw new Error(`Team not found: ${String(input.team ?? '')}`)
       }
+      const teamMemory = await getTeamMemory(team.name)
       const createdTasks = []
       for (const member of team.members) {
         const localAgent = member.agentName
           ? await getLocalAgent(member.agentName, workspaceRoot, request.cwd ?? '.')
           : null
+        const teamMessages = await listTeamMessages(team.name, member.name)
         const memberPrompt = [
           member.rolePrompt ? `Role: ${member.rolePrompt}` : '',
           `Team: ${team.name}`,
           `Member: ${member.name}`,
+          teamMemory?.content ? `Team memory:\n${teamMemory.content}` : '',
+          teamMessages.length
+            ? `Team inbox:\n${teamMessages
+                .slice(-8)
+                .map(message => `- [${message.createdAt}] ${message.from} -> ${message.to}: ${message.content}`)
+                .join('\n')}`
+            : '',
           String(input.prompt ?? ''),
         ]
           .filter(Boolean)
@@ -2609,6 +2737,37 @@ async function executeTool(
       }
       return JSON.stringify({ team: team.name, tasks: createdTasks }, null, 2)
     }
+    case 'list_team_messages': {
+      const messages = await listTeamMessages(
+        String(input.team ?? ''),
+        input.member ? String(input.member) : undefined,
+      )
+      return JSON.stringify(messages, null, 2)
+    }
+    case 'send_team_message': {
+      const message = await sendTeamMessage({
+        team: String(input.team ?? ''),
+        from: String(input.from ?? ''),
+        to: input.to ? String(input.to) : undefined,
+        content: String(input.content ?? ''),
+      })
+      return JSON.stringify(message, null, 2)
+    }
+    case 'get_team_memory': {
+      const memory = await getTeamMemory(String(input.team ?? ''))
+      return JSON.stringify(memory, null, 2)
+    }
+    case 'set_team_memory': {
+      const memory = await setTeamMemory(
+        String(input.team ?? ''),
+        String(input.content ?? ''),
+      )
+      return JSON.stringify(memory, null, 2)
+    }
+    case 'sync_team_memory': {
+      const memory = await syncTeamMemoryFromMessages(String(input.team ?? ''))
+      return JSON.stringify(memory, null, 2)
+    }
     case 'list_bridges': {
       const bridges = await listBridges()
       return JSON.stringify(bridges, null, 2)
@@ -2626,6 +2785,20 @@ async function executeTool(
         reference: String(input.name ?? ''),
         command: String(input.command ?? ''),
         cwd: input.cwd ? String(input.cwd) : undefined,
+      })
+      return JSON.stringify(result, null, 2)
+    }
+    case 'list_remote_triggers': {
+      const triggers = await listRemoteTriggers()
+      return JSON.stringify(triggers, null, 2)
+    }
+    case 'fire_remote_trigger': {
+      const result = await fireRemoteTrigger({
+        reference: String(input.name ?? ''),
+        payload:
+          typeof input.payload === 'object' && input.payload && !Array.isArray(input.payload)
+            ? (input.payload as Record<string, unknown>)
+            : undefined,
       })
       return JSON.stringify(result, null, 2)
     }

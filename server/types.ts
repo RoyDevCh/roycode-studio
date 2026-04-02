@@ -43,6 +43,8 @@ export type AppSettings = {
   accessMode: AccessMode
   theme?: 'dark' | 'light' | 'auto'
   vimMode?: boolean
+  briefMode?: boolean
+  voiceMode?: boolean
   outputStyle?: string
   cleanupPeriodDays?: number
   defaultShell?: 'powershell' | 'bash'

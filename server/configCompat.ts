@@ -119,6 +119,22 @@ const CONFIG_HANDLERS: ConfigHandler[] = [
     set: (settings, value) => ({ ...settings, vimMode: parseBooleanLike(value) }),
   },
   {
+    key: 'briefMode',
+    description: 'Whether RoyCode should prefer concise brief-mode answers.',
+    type: 'boolean',
+    aliases: ['brief', 'ui.brief'],
+    get: settings => settings.briefMode ?? false,
+    set: (settings, value) => ({ ...settings, briefMode: parseBooleanLike(value) }),
+  },
+  {
+    key: 'voiceMode',
+    description: 'Whether RoyCode should speak assistant answers locally when supported.',
+    type: 'boolean',
+    aliases: ['voice', 'ui.voice'],
+    get: settings => settings.voiceMode ?? false,
+    set: (settings, value) => ({ ...settings, voiceMode: parseBooleanLike(value) }),
+  },
+  {
     key: 'permissions.defaultMode',
     description: 'Claude-style permission preset: workspace, safe, or full.',
     type: 'enum',

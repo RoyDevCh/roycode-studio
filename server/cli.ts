@@ -83,12 +83,33 @@ import {
 } from './notebooks.js'
 import {
   addTeamMember,
+  appendTeamMemory,
+  clearTeamMessages,
   createTeam,
   getTeam,
+  getTeamMemory,
   listTeams,
+  listTeamMessages,
   removeTeam,
   removeTeamMember,
+  sendTeamMessage,
+  setTeamMemory,
+  syncTeamMemoryFromMessages,
 } from './teams.js'
+import { buildBrowserSearchUrl, openUrlInBrowser } from './chrome.js'
+import { describeVoiceSupport, speakText } from './voice.js'
+import {
+  describeSettingsSync,
+  exportSettingsBundle,
+  importSettingsBundle,
+} from './settingsSync.js'
+import {
+  addRemoteTrigger,
+  fireRemoteTrigger,
+  listRemoteTriggers,
+  removeRemoteTrigger,
+  setRemoteTriggerEnabled,
+} from './remoteTriggers.js'
 import { webFetch, webSearch } from './web.js'
 import {
   applyWorkspaceBatchChanges,
@@ -462,7 +483,9 @@ function buildPromptLabel(state: CliState): string {
   const shortModel = model.length > 24 ? `${model.slice(0, 24)}...` : model
   const modeSuffix =
     state.executionMode === 'default' ? '' : ` ${yellow(`[${describeExecutionMode(state)}]`)}`
-  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)}${modeSuffix} ${cyan('> ')}`
+  const briefSuffix = state.settings.briefMode ? ` ${dim('[brief]')}` : ''
+  const voiceSuffix = state.settings.voiceMode ? ` ${dim('[voice]')}` : ''
+  return `${cyan('roycode')} ${dim(`[${provider.name}:${shortModel}]`)}${briefSuffix}${voiceSuffix}${modeSuffix} ${cyan('> ')}`
 }
 
 function normalizeCommand(input: string): {
@@ -678,7 +701,9 @@ function normalizeToolList(value?: string[] | string): string[] | undefined {
 }
 
 function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
-  const firstArg = rawArgs.trim().split(/\s+/)[0]?.toLowerCase() ?? ''
+  const argTokens = rawArgs.trim().split(/\s+/).filter(Boolean)
+  const firstArg = argTokens[0]?.toLowerCase() ?? ''
+  const secondArg = argTokens[1]?.toLowerCase() ?? ''
 
   switch (commandName) {
     case 'branch':
@@ -690,6 +715,8 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
     case 'rewind':
     case 'theme':
     case 'vim':
+    case 'brief':
+    case 'voice':
     case 'workspace':
     case 'access':
     case 'permissions':
@@ -716,7 +743,9 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
     case 'plugin':
       return ['import', 'enable', 'disable', 'remove'].includes(firstArg)
     case 'memory':
-      return ['set', 'append', 'clear'].includes(firstArg)
+      return ['set', 'append', 'clear', 'extract'].includes(firstArg)
+    case 'session':
+      return ['branch', 'export', 'resume', 'title', 'rename', 'delete'].includes(firstArg)
     case 'agent-memory':
     case 'agentmemory':
       return ['set', 'append'].includes(firstArg)
@@ -736,7 +765,19 @@ function isPlanModeWriteCommand(commandName: string, rawArgs: string): boolean {
     case 'notebook':
       return ['set', 'add', 'delete'].includes(firstArg)
     case 'team':
-      return ['create', 'task'].includes(firstArg)
+      if (['create', 'task', 'message', 'clear-inbox', 'delete', 'remove'].includes(firstArg)) {
+        return true
+      }
+      if (firstArg === 'memory') {
+        return ['set', 'append', 'sync'].includes(secondArg || 'show')
+      }
+      return false
+    case 'settings-sync':
+    case 'settingssync':
+      return ['import'].includes(firstArg)
+    case 'remote-trigger':
+    case 'remotetrigger':
+      return ['add', 'enable', 'disable', 'remove', 'delete'].includes(firstArg)
     case 'bridge':
       return ['add', 'remove', 'enable', 'disable', 'run'].includes(firstArg)
     case 'marketplace':
@@ -863,6 +904,8 @@ function printStatus(state: CliState): void {
       `${label('access')} ${state.settings.accessMode}`,
       `${label('theme')} ${state.settings.theme || 'dark'}`,
       `${label('vim')} ${(state.settings.vimMode ?? false) ? green('on') : red('off')}`,
+      `${label('brief')} ${(state.settings.briefMode ?? false) ? green('on') : red('off')}`,
+      `${label('voice')} ${(state.settings.voiceMode ?? false) ? green('on') : red('off')}`,
       `${label('safe-write')} ${state.settings.safeWriteMode ? green('on') : red('off')}`,
       `${label('style')} ${state.settings.outputStyle || DEFAULT_OUTPUT_STYLE_NAME}`,
       `${label('provider')} ${provider.name}`,
@@ -974,6 +1017,10 @@ function printHelp(): void {
       '/model <name> - switch model under the current provider',
       '/theme <dark|light|auto> - switch the preferred RoyCode theme',
       '/vim <on|off|toggle> - toggle vim-style input mode preference',
+      '/brief <on|off|toggle> - toggle concise brief-mode replies',
+      '/voice <on|off|toggle|say> - toggle or use local voice output',
+      '/statusline - print the compact RoyCode status line',
+      '/keybindings - print the main TUI keybindings',
       '/workspace <path> - change workspace root',
       '/access <workspace|unrestricted> - change filesystem mode',
       '/permissions <full|safe|workspace> - switch permission preset',
@@ -1018,6 +1065,7 @@ function printHelp(): void {
       '/memory - show workspace memory',
       '/memory set <text> - replace workspace memory',
       '/memory append <text> - append to workspace memory',
+      '/memory extract [instructions] - extract durable memory from this session',
       '/memory clear - reset workspace memory',
       '/agent-memory show <agent> [scope] - inspect subagent memory',
       '/agent-memory set <agent> <scope> <text> - replace agent memory',
@@ -1064,9 +1112,19 @@ function printHelp(): void {
       '/notebook delete <path> <index|id> - delete one notebook cell',
       '/teams - list local teams',
       '/team create <name> [member,member,...] - create a local team',
+      '/team message <team> <from> <to|all> <text> - send a local team message',
+      '/team inbox <team> [member] - inspect local team messages',
+      '/team clear-inbox <team> [member] - clear stored team messages',
+      '/team memory <team> [show|set|append|sync] [text] - inspect or update team memory',
       '/team run <name> <prompt> - run all members of a team',
       '/team task <name> <prompt> - launch one background task per team member',
+      '/chrome open <url> - open a URL in the local browser',
+      '/chrome search <query> - open a browser search',
+      '/chrome review <url> - fetch a page for quick review',
       '/bridges - list configured RoyCode bridge endpoints',
+      '/remote-trigger - list saved remote triggers',
+      '/remote-trigger add <name> <url> [POST|PUT] [token] - save a remote trigger',
+      '/remote-trigger run <name> [json] - fire one remote trigger',
       '/bridge add <name> <url> [token] - register a remote RoyCode bridge',
       '/bridge run <name> <command> - execute a remote command through a bridge',
       '/marketplace - list self-hosted marketplace items',
@@ -1098,11 +1156,13 @@ function printHelp(): void {
       '/git unstage <path> - unstage one file',
       '/git commit <message> - create a commit',
       '/sessions - list saved CLI sessions',
+      '/session [info|branch|summary|thinkback|export|resume|title|delete] - session workflow umbrella command',
       '/resume <id|latest> - resume a saved session',
       '/branch [title] - fork the current conversation into a new session',
       '/summary [instructions] - summarize the current conversation',
       '/thinkback - inspect saved session history and usage patterns',
       '/insights - alias for /thinkback',
+      '/settings-sync [status|export|import] - export or import RoyCode local settings bundles',
       '/title <text> - rename the current session',
       '/rename <text> - alias for /title',
       '/delete-session <id|latest|current> - delete a saved session',
@@ -1722,6 +1782,26 @@ function printKeyValueBlock(
   process.stdout.write(`${label(title)}\n`)
   for (const entry of entries) {
     process.stdout.write(`- ${entry.label}: ${entry.value}\n`)
+  }
+}
+
+function printTeamMessages(
+  messages: Array<{
+    from: string
+    to: string
+    content: string
+    createdAt: string
+  }>,
+): void {
+  if (!messages.length) {
+    info('No team messages')
+    return
+  }
+
+  for (const message of messages) {
+    process.stdout.write(
+      `- [${message.createdAt}] ${message.from} -> ${message.to}: ${message.content}\n`,
+    )
   }
 }
 
@@ -2867,6 +2947,35 @@ async function handleTeamsCommand(): Promise<void> {
   }
 }
 
+async function buildTeamMemberPrompt(
+  teamName: string,
+  member: {
+    name: string
+    rolePrompt?: string
+  },
+  taskPrompt: string,
+): Promise<string> {
+  const [teamMemory, teamMessages] = await Promise.all([
+    getTeamMemory(teamName),
+    listTeamMessages(teamName, member.name),
+  ])
+
+  return [
+    member.rolePrompt ? `Role: ${member.rolePrompt}` : '',
+    `Team member: ${member.name}`,
+    teamMemory?.content ? `Team memory:\n${teamMemory.content}` : '',
+    teamMessages.length
+      ? `Team inbox:\n${teamMessages
+          .slice(-8)
+          .map(message => `- [${message.createdAt}] ${message.from} -> ${message.to}: ${message.content}`)
+          .join('\n')}`
+      : '',
+    taskPrompt,
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void> {
   const { action, rest } = parseCommandTarget(rawArgs)
   if (!action) {
@@ -2897,9 +3006,15 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
       fail(`Team not found: ${rest}`)
       return
     }
+    const [memory, messages] = await Promise.all([
+      getTeamMemory(team.name),
+      listTeamMessages(team.name),
+    ])
     printKeyValueBlock(`Team ${team.name}`, [
       { label: 'description', value: team.description || '(none)' },
       { label: 'members', value: String(team.members.length) },
+      { label: 'memory', value: memory?.updatedAt || '(empty)' },
+      { label: 'messages', value: String(messages.length) },
     ])
     for (const member of team.members) {
       process.stdout.write(
@@ -2951,6 +3066,84 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
     return
   }
 
+  if (action === 'message') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const teamName = tokens.shift()
+    const from = tokens.shift()
+    const to = tokens.shift()
+    const content = tokens.join(' ').trim()
+    if (!teamName || !from || !to || !content) {
+      fail('Usage: /team message <team> <from> <to|all> <text>')
+      return
+    }
+    const message = await sendTeamMessage({
+      team: teamName,
+      from,
+      to,
+      content,
+    })
+    ok(`Queued team message ${message.id}`)
+    return
+  }
+
+  if (action === 'inbox' || action === 'messages') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const teamName = tokens.shift()
+    if (!teamName) {
+      fail('Usage: /team inbox <team> [member]')
+      return
+    }
+    const messages = await listTeamMessages(teamName, tokens.shift())
+    printTeamMessages(messages)
+    return
+  }
+
+  if (action === 'clear-inbox') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const teamName = tokens.shift()
+    if (!teamName) {
+      fail('Usage: /team clear-inbox <team> [member]')
+      return
+    }
+    const removed = await clearTeamMessages(teamName, tokens.shift())
+    ok(`Cleared ${removed} team message(s)`)
+    return
+  }
+
+  if (action === 'memory') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const teamName = tokens.shift()
+    const subaction = (tokens.shift() || 'show').toLowerCase()
+    if (!teamName) {
+      fail('Usage: /team memory <team> [show|set|append|sync] [text]')
+      return
+    }
+    if (subaction === 'show') {
+      const memory = await getTeamMemory(teamName)
+      printDivider()
+      process.stdout.write(`${label(`Team Memory ${teamName}`)}\n\n${memory?.content || dim('(empty)')}\n`)
+      printDivider()
+      return
+    }
+    if (subaction === 'set') {
+      const memory = await setTeamMemory(teamName, tokens.join(' '))
+      ok(`Updated team memory for ${memory.teamName}`)
+      return
+    }
+    if (subaction === 'append') {
+      const memory = await appendTeamMemory(teamName, tokens.join(' '))
+      ok(`Appended team memory for ${memory.teamName}`)
+      return
+    }
+    if (subaction === 'sync') {
+      const memory = await syncTeamMemoryFromMessages(teamName)
+      ok(`Synced team memory for ${memory.teamName}`)
+      return
+    }
+    fail('Usage: /team memory <team> [show|set|append|sync] [text]')
+    return
+  }
+
   if (action === 'run') {
     const tokens = tokenizeQuotedArgs(rest)
     const teamName = tokens.shift()
@@ -2973,7 +3166,7 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
         : null
       const answer = await runPromptInternal(
         state,
-        [member.rolePrompt ? `Role: ${member.rolePrompt}` : '', taskPrompt].filter(Boolean).join('\n\n'),
+        await buildTeamMemberPrompt(team.name, member, taskPrompt),
         agent ? await buildAgentPromptRunOptions(state, agent, [`Team member: ${member.name}`]) : { isolated: true },
       )
       process.stdout.write(`${magenta(member.name)}\n${answer || ''}\n`)
@@ -3000,13 +3193,7 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
       const agent = member.agentName
         ? await getLocalAgent(member.agentName, state.settings.workspaceRoot, state.cwd)
         : null
-      const rolePrompt = [
-        member.rolePrompt ? `Role: ${member.rolePrompt}` : '',
-        `Team member: ${member.name}`,
-        taskPrompt,
-      ]
-        .filter(Boolean)
-        .join('\n\n')
+      const rolePrompt = await buildTeamMemberPrompt(team.name, member, taskPrompt)
       const task = await createTask({
         title: `${team.name}:${member.name}`,
         prompt: rolePrompt,
@@ -3025,7 +3212,7 @@ async function handleTeamCommand(state: CliState, rawArgs: string): Promise<void
     return
   }
 
-  fail('Usage: /team create|show|add-member|remove-member|run|task|delete ...')
+  fail('Usage: /team create|show|add-member|remove-member|message|inbox|clear-inbox|memory|run|task|delete ...')
 }
 
 async function handleBridgesCommand(): Promise<void> {
@@ -3551,6 +3738,67 @@ async function buildConversationSummary(
   return response.answer.trim() || null
 }
 
+async function buildWorkspaceMemoryExtraction(
+  state: CliState,
+  instructions: string,
+): Promise<string | null> {
+  if (!state.messages.length && !state.compactSummaries.length) {
+    return null
+  }
+
+  const provider = getSelectedProvider(state.settings)
+  const model = resolveModel(state.settings, provider)
+  const compactSystemMessage = buildCompactSystemMessage(state)
+  const currentMemory = await readWorkspaceMemory(state.settings.workspaceRoot)
+  const prompt = [
+    'Extract only durable project memory from this RoyCode session.',
+    'Keep only information that should still matter later in this workspace:',
+    '- coding conventions',
+    '- architecture decisions',
+    '- important commands or setup notes',
+    '- stable constraints or known pitfalls',
+    'Do not include temporary chatter or one-off steps.',
+    'Return short markdown bullets only.',
+    instructions ? `Extra instructions:\n${instructions}` : '',
+    currentMemory.content.trim()
+      ? `Current workspace memory:\n${currentMemory.content}`
+      : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+
+  const response = await streamAgentChat(
+    provider,
+    state.settings,
+    {
+      providerId: provider.id,
+      model,
+      cwd: state.cwd,
+      maxAgentSteps: 1,
+      systemAddenda: [
+        'You are extracting durable workspace memory. Do not call tools.',
+        ...(compactSystemMessage ? [compactSystemMessage] : []),
+      ],
+      messages: [
+        ...cloneMessages(state.messages),
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+    },
+    {
+      async onEvent(event) {
+        if (event.type === 'status') {
+          process.stdout.write(`${dim(`[memory] ${event.message}`)}\n`)
+        }
+      },
+    },
+  )
+
+  return response.answer.trim() || null
+}
+
 function rankCounts(
   counts: Map<string, number>,
   limit = 5,
@@ -3733,6 +3981,43 @@ async function handleThinkbackCommand(state: CliState): Promise<void> {
   printThinkbackSummary(summary)
 }
 
+async function handleSessionCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action || action === 'info' || action === 'show' || action === 'status') {
+    printStatus(state)
+    return
+  }
+  if (action === 'branch') {
+    await handleBranchCommand(state, rest)
+    return
+  }
+  if (action === 'summary') {
+    await handleSummaryCommand(state, rest)
+    return
+  }
+  if (action === 'thinkback' || action === 'insights') {
+    await handleThinkbackCommand(state)
+    return
+  }
+  if (action === 'export') {
+    await handleExportCommand(state, rest)
+    return
+  }
+  if (action === 'resume') {
+    await handleResumeCommand(state, rest)
+    return
+  }
+  if (action === 'title' || action === 'rename') {
+    await handleTitleCommand(state, rest)
+    return
+  }
+  if (action === 'delete') {
+    await handleDeleteSessionCommand(state, rest || 'current')
+    return
+  }
+  fail('Usage: /session [info|branch [title]|summary [instructions]|thinkback|export [path]|resume <id>|title <text>|delete [current|id]]')
+}
+
 async function handleThemeCommand(state: CliState, rawArgs: string): Promise<void> {
   const nextTheme = rawArgs.trim().toLowerCase()
   if (!nextTheme) {
@@ -3785,6 +4070,287 @@ async function handleVimCommand(state: CliState, rawArgs: string): Promise<void>
     configValue: String(nextValue),
   })
   ok(`Vim mode ${nextValue ? 'enabled' : 'disabled'}`)
+}
+
+async function handleBriefCommand(state: CliState, rawArgs: string): Promise<void> {
+  const action = rawArgs.trim().toLowerCase()
+  if (!action || action === 'status') {
+    info(`Brief mode is ${(state.settings.briefMode ?? false) ? 'on' : 'off'}`)
+    info('Usage: /brief <on|off|toggle>')
+    return
+  }
+
+  let nextValue: boolean
+  if (action === 'toggle') {
+    nextValue = !(state.settings.briefMode ?? false)
+  } else if (action === 'on' || action === 'enable' || action === 'enabled') {
+    nextValue = true
+  } else if (action === 'off' || action === 'disable' || action === 'disabled') {
+    nextValue = false
+  } else {
+    fail('Usage: /brief <on|off|toggle>')
+    return
+  }
+
+  await updateSettings(state, settings => ({
+    ...settings,
+    briefMode: nextValue,
+  }))
+  await runHookSafely('config-changed', state, {
+    configKey: 'briefMode',
+    configValue: String(nextValue),
+  })
+  ok(`Brief mode ${nextValue ? 'enabled' : 'disabled'}`)
+}
+
+async function handleVoiceCommand(state: CliState, rawArgs: string): Promise<void> {
+  const support = describeVoiceSupport()
+  const { action, rest } = parseCommandTarget(rawArgs)
+
+  if (!action || action === 'status') {
+    info(`Voice mode is ${(state.settings.voiceMode ?? false) ? 'on' : 'off'}`)
+    info(`Voice backend: ${support.mode}`)
+    return
+  }
+
+  if (action === 'say') {
+    if (!rest) {
+      fail('Usage: /voice say <text>')
+      return
+    }
+    await speakText(rest)
+    ok('Spoke text through the local voice backend')
+    return
+  }
+
+  let nextValue: boolean
+  if (action === 'toggle') {
+    nextValue = !(state.settings.voiceMode ?? false)
+  } else if (action === 'on' || action === 'enable' || action === 'enabled') {
+    nextValue = true
+  } else if (action === 'off' || action === 'disable' || action === 'disabled') {
+    nextValue = false
+  } else {
+    fail('Usage: /voice <on|off|toggle|status|say <text>>')
+    return
+  }
+
+  if (nextValue && !support.supported) {
+    fail(`Voice mode is not supported on this platform (${support.mode})`)
+    return
+  }
+
+  await updateSettings(state, settings => ({
+    ...settings,
+    voiceMode: nextValue,
+  }))
+  await runHookSafely('config-changed', state, {
+    configKey: 'voiceMode',
+    configValue: String(nextValue),
+  })
+  ok(`Voice mode ${nextValue ? 'enabled' : 'disabled'}`)
+}
+
+function renderStatusline(state: CliState): string {
+  const provider = getSelectedProvider(state.settings)
+  const model = resolveModel(state.settings, provider)
+  const parts = [
+    `session ${state.sessionTitle}`,
+    `workspace ${state.settings.workspaceRoot}`,
+    `cwd ${state.cwd}`,
+    `provider ${provider.id}`,
+    `model ${model || 'none'}`,
+    `mode ${describeExecutionMode(state)}`,
+    `brief ${(state.settings.briefMode ?? false) ? 'on' : 'off'}`,
+    `voice ${(state.settings.voiceMode ?? false) ? 'on' : 'off'}`,
+    `safe-write ${state.settings.safeWriteMode ? 'on' : 'off'}`,
+  ]
+  return parts.join(' | ')
+}
+
+function handleStatuslineCommand(state: CliState): void {
+  process.stdout.write(`${renderStatusline(state)}\n`)
+}
+
+function handleKeybindingsCommand(): void {
+  printKeyValueBlock('RoyCode TUI Keybindings', [
+    { label: 'Ctrl+R', value: '/status' },
+    { label: 'Ctrl+W', value: '/context' },
+    { label: 'Ctrl+G', value: '/git' },
+    { label: 'Ctrl+P', value: '/pending' },
+    { label: 'Ctrl+Y', value: '/cron' },
+    { label: 'Ctrl+K', value: '/worktree' },
+    { label: 'Ctrl+O', value: '/plan-mode status' },
+    { label: 'Ctrl+L', value: 'clear local TUI view' },
+    { label: 'Ctrl+C', value: 'exit RoyCode' },
+  ])
+}
+
+async function handleChromeCommand(rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action) {
+    info('Usage: /chrome open <url> | /chrome search <query> | /chrome review <url>')
+    return
+  }
+
+  if (action === 'open') {
+    if (!rest) {
+      fail('Usage: /chrome open <url>')
+      return
+    }
+    await openUrlInBrowser(stripWrappingQuotes(rest))
+    ok('Opened URL in the default browser')
+    return
+  }
+
+  if (action === 'search') {
+    if (!rest) {
+      fail('Usage: /chrome search <query>')
+      return
+    }
+    await openUrlInBrowser(buildBrowserSearchUrl(rest))
+    ok('Opened browser search')
+    return
+  }
+
+  if (action === 'review' || action === 'fetch') {
+    if (!rest) {
+      fail('Usage: /chrome review <url>')
+      return
+    }
+    const result = await webFetch(stripWrappingQuotes(rest))
+    printDivider()
+    process.stdout.write(`${label(result.title)}\n${dim(result.url)}\n\n${result.text}\n`)
+    printDivider()
+    return
+  }
+
+  fail('Usage: /chrome open <url> | /chrome search <query> | /chrome review <url>')
+}
+
+async function handleSettingsSyncCommand(rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action || action === 'status') {
+    const status = await describeSettingsSync()
+    printKeyValueBlock('Settings Sync', [
+      { label: 'data-dir', value: status.dataDir },
+      { label: 'json-files', value: String(status.fileEntries.length) },
+      { label: 'directory-files', value: String(status.directoryEntries.length) },
+      { label: 'total', value: String(status.totalEntries) },
+    ])
+    return
+  }
+
+  if (action === 'export') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const targetPath = tokens.find(token => !token.startsWith('--'))
+    if (!targetPath) {
+      fail('Usage: /settings-sync export <path> [--redact-secrets]')
+      return
+    }
+    const result = await exportSettingsBundle(targetPath, {
+      redactSecrets: tokens.includes('--redact-secrets'),
+    })
+    ok(
+      `Exported settings sync bundle to ${result.bundlePath} (${result.entryCount} entries${result.redacted ? ', redacted' : ''})`,
+    )
+    return
+  }
+
+  if (action === 'import') {
+    const targetPath = stripWrappingQuotes(rest).trim()
+    if (!targetPath) {
+      fail('Usage: /settings-sync import <path>')
+      return
+    }
+    const result = await importSettingsBundle(targetPath)
+    ok(`Imported ${result.entryCount} sync entries from ${result.bundlePath}`)
+    return
+  }
+
+  fail('Usage: /settings-sync [status|export <path> [--redact-secrets]|import <path>]')
+}
+
+async function handleRemoteTriggerCommand(rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  if (!action || action === 'list') {
+    const triggers = await listRemoteTriggers()
+    if (!triggers.length) {
+      info('No remote triggers configured')
+      return
+    }
+    for (const trigger of triggers) {
+      process.stdout.write(
+        `- ${trigger.name} ${dim(`[${trigger.method}]`)} ${dim(trigger.url)} ${trigger.enabled ? green('enabled') : red('disabled')}\n`,
+      )
+    }
+    return
+  }
+
+  if (action === 'add') {
+    const tokens = tokenizeQuotedArgs(rest)
+    const name = tokens.shift()
+    const url = tokens.shift()
+    if (!name || !url) {
+      fail('Usage: /remote-trigger add <name> <url> [POST|PUT] [token]')
+      return
+    }
+    const maybeMethod = (tokens[0] || '').toUpperCase()
+    const method =
+      maybeMethod === 'PUT' || maybeMethod === 'POST'
+        ? (tokens.shift() as 'POST' | 'PUT')
+        : undefined
+    const trigger = await addRemoteTrigger({
+      name,
+      url,
+      method,
+      token: tokens.shift(),
+    })
+    ok(`Saved remote trigger ${trigger.name}`)
+    return
+  }
+
+  if (action === 'enable' || action === 'disable') {
+    const reference = rest.trim()
+    if (!reference) {
+      fail(`Usage: /remote-trigger ${action} <name>`)
+      return
+    }
+    const trigger = await setRemoteTriggerEnabled(reference, action === 'enable')
+    ok(`${trigger.name} ${action}d`)
+    return
+  }
+
+  if (action === 'remove' || action === 'delete') {
+    const reference = rest.trim()
+    if (!reference) {
+      fail('Usage: /remote-trigger remove <name>')
+      return
+    }
+    await removeRemoteTrigger(reference)
+    ok(`Removed remote trigger ${reference}`)
+    return
+  }
+
+  if (action === 'run' || action === 'fire') {
+    const match = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/)
+    const reference = match?.[1]
+    if (!reference) {
+      fail('Usage: /remote-trigger run <name> [json]')
+      return
+    }
+    const payload = parseOptionalJson(match?.[2] ?? '')
+    const result = await fireRemoteTrigger({
+      reference,
+      payload,
+    })
+    process.stdout.write(
+      `${result.status} ${result.ok ? green('OK') : red('FAIL')} ${truncate(result.body.replace(/\s+/g, ' '), 180)}\n`,
+    )
+    return
+  }
+
+  fail('Usage: /remote-trigger [list|add|enable|disable|remove|run] ...')
 }
 
 async function handleCompactCommand(state: CliState, rawArgs: string): Promise<void> {
@@ -4116,7 +4682,21 @@ async function handleMemoryCommand(state: CliState, rawArgs: string): Promise<vo
     return
   }
 
-  fail('Usage: /memory | /memory set <text> | /memory append <text> | /memory clear')
+  if (action === 'extract') {
+    const extracted = await buildWorkspaceMemoryExtraction(state, rest)
+    if (!extracted) {
+      info('Nothing to extract from the current session')
+      return
+    }
+    const memory = await appendWorkspaceMemory(state.settings.workspaceRoot, extracted)
+    printDivider()
+    process.stdout.write(`${label('Extracted Workspace Memory')}\n\n${extracted}\n`)
+    printDivider()
+    ok(`Workspace memory updated: ${memory.path}`)
+    return
+  }
+
+  fail('Usage: /memory | /memory set <text> | /memory append <text> | /memory clear | /memory extract [instructions]')
 }
 
 async function handleContextCommand(state: CliState): Promise<void> {
@@ -5418,6 +5998,11 @@ async function runPromptInternal(
     ...(options.disallowedTools ?? []),
   ])
   const systemAddenda = [
+    ...(state.settings.briefMode
+      ? [
+          'RoyCode brief mode is enabled. Keep answers concise, high-signal, and compact unless the user explicitly asks for depth.',
+        ]
+      : []),
     ...modeAddenda.extraSystemAddenda,
     ...(compactSystemMessage ? [compactSystemMessage] : []),
     ...(skillSystemMessage ? [skillSystemMessage] : []),
@@ -5565,6 +6150,13 @@ async function runPromptInternal(
         prompt: effectiveRawInput,
         assistant: response.answer,
       })
+      if (state.settings.voiceMode) {
+        try {
+          await speakText(response.answer)
+        } catch (error) {
+          warn(`Voice output failed: ${error instanceof Error ? error.message : 'unknown error'}`)
+        }
+      }
     }
     return response.answer
   } catch (error) {
@@ -5629,6 +6221,18 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
       return true
     case 'vim':
       await handleVimCommand(state, command.rawArgs)
+      return true
+    case 'brief':
+      await handleBriefCommand(state, command.rawArgs)
+      return true
+    case 'voice':
+      await handleVoiceCommand(state, command.rawArgs)
+      return true
+    case 'statusline':
+      handleStatuslineCommand(state)
+      return true
+    case 'keybindings':
+      handleKeybindingsCommand()
       return true
     case 'workspace':
       await handleWorkspaceCommand(state, command.rawArgs)
@@ -5759,8 +6363,15 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'team':
       await handleTeamCommand(state, command.rawArgs)
       return true
+    case 'chrome':
+      await handleChromeCommand(command.rawArgs)
+      return true
     case 'bridges':
       await handleBridgesCommand()
+      return true
+    case 'remote-trigger':
+    case 'remotetrigger':
+      await handleRemoteTriggerCommand(command.rawArgs)
       return true
     case 'bridge':
       await handleBridgeCommand(state, command.rawArgs)
@@ -5792,6 +6403,9 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'sessions':
       await handleSessionsCommand(state)
       return true
+    case 'session':
+      await handleSessionCommand(state, command.rawArgs)
+      return true
     case 'resume':
       await handleResumeCommand(state, command.rawArgs)
       return true
@@ -5820,6 +6434,10 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
       return true
     case 'export':
       await handleExportCommand(state, command.rawArgs)
+      return true
+    case 'settings-sync':
+    case 'settingssync':
+      await handleSettingsSyncCommand(command.rawArgs)
       return true
     case 'review':
     case 'fix':

@@ -99,6 +99,8 @@ const settingsPayloadSchema = z.object({
   accessMode: z.enum(['workspace', 'unrestricted']).optional(),
   theme: z.enum(['dark', 'light', 'auto']).optional(),
   vimMode: z.boolean().optional(),
+  briefMode: z.boolean().optional(),
+  voiceMode: z.boolean().optional(),
   outputStyle: z.string().min(1).optional(),
   cleanupPeriodDays: z.number().int().min(1).max(3650).optional(),
   defaultShell: z.enum(['powershell', 'bash']).optional(),

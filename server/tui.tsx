@@ -28,6 +28,8 @@ type StatusSnapshot = {
   access?: string
   theme?: string
   vim?: string
+  brief?: string
+  voice?: string
   safeWrite?: string
   style?: string
   provider?: string
@@ -122,6 +124,8 @@ function parseStatusSnapshot(line: string): Partial<StatusSnapshot> | null {
     ['access', 'access '],
     ['theme', 'theme '],
     ['vim', 'vim '],
+    ['brief', 'brief '],
+    ['voice', 'voice '],
     ['safeWrite', 'safe-write '],
     ['style', 'style '],
     ['provider', 'provider '],
@@ -152,7 +156,7 @@ function RoyCodeTui(): React.ReactElement {
     {
       id: 'boot',
       channel: 'system',
-      text: 'RoyCode TUI ready. Type /help for commands. Ctrl+L clears the view, Ctrl+R sends /status, Ctrl+W sends /context, Ctrl+Y sends /cron, Ctrl+K sends /worktree, Ctrl+O sends /plan-mode status.',
+      text: 'RoyCode TUI ready. Type /help for commands. Ctrl+L clears the view, Ctrl+R sends /status, Ctrl+W sends /context, Ctrl+Y sends /cron, Ctrl+K sends /worktree, Ctrl+O sends /plan-mode status, Ctrl+B toggles brief mode, Ctrl+I opens thinkback, Ctrl+S runs /summary.',
     },
   ])
   const [status, setStatus] = useState('Launching RoyCode CLI...')
@@ -316,6 +320,21 @@ function RoyCodeTui(): React.ReactElement {
       childRef.current?.stdin.write('/plan-mode status\n')
       return
     }
+    if (key.ctrl && value === 'b') {
+      setLastShortcut('Ctrl+B')
+      childRef.current?.stdin.write('/brief toggle\n')
+      return
+    }
+    if (key.ctrl && value === 'i') {
+      setLastShortcut('Ctrl+I')
+      childRef.current?.stdin.write('/thinkback\n')
+      return
+    }
+    if (key.ctrl && value === 's') {
+      setLastShortcut('Ctrl+S')
+      childRef.current?.stdin.write('/summary\n')
+      return
+    }
   })
 
   const submitInput = (value: string) => {
@@ -388,6 +407,8 @@ function RoyCodeTui(): React.ReactElement {
             <Text color="gray">access: {snapshot.access ?? 'unknown'}</Text>
             <Text color="gray">theme: {snapshot.theme ?? 'unknown'}</Text>
             <Text color="gray">vim: {snapshot.vim ?? 'unknown'}</Text>
+            <Text color="gray">brief: {snapshot.brief ?? 'unknown'}</Text>
+            <Text color="gray">voice: {snapshot.voice ?? 'unknown'}</Text>
             <Text color="gray">safe-write: {snapshot.safeWrite ?? 'unknown'}</Text>
             <Text color="gray">mode: {snapshot.mode ?? 'unknown'}</Text>
             <Text color="gray">skills: {snapshot.skills ?? 'unknown'}</Text>
@@ -411,6 +432,9 @@ function RoyCodeTui(): React.ReactElement {
             <Text color="gray">Ctrl+Y: /cron</Text>
             <Text color="gray">Ctrl+K: /worktree</Text>
             <Text color="gray">Ctrl+O: /plan-mode status</Text>
+            <Text color="gray">Ctrl+B: /brief toggle</Text>
+            <Text color="gray">Ctrl+I: /thinkback</Text>
+            <Text color="gray">Ctrl+S: /summary</Text>
             <Text color="gray">Ctrl+L: clear view</Text>
             <Text color="gray">Ctrl+C: exit</Text>
             <Text color="gray">last: {lastShortcut}</Text>

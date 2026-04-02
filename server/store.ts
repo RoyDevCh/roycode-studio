@@ -30,6 +30,8 @@ function getDefaultSettings(): AppSettings {
     accessMode: 'workspace',
     theme: 'dark',
     vimMode: false,
+    briefMode: false,
+    voiceMode: false,
     outputStyle: 'default',
     cleanupPeriodDays: 30,
     defaultShell: 'powershell',
@@ -64,6 +66,10 @@ function normalizeSettings(raw: Partial<AppSettings>): AppSettings {
         ? raw.theme
         : defaults.theme,
     vimMode: typeof raw.vimMode === 'boolean' ? raw.vimMode : defaults.vimMode,
+    briefMode:
+      typeof raw.briefMode === 'boolean' ? raw.briefMode : defaults.briefMode,
+    voiceMode:
+      typeof raw.voiceMode === 'boolean' ? raw.voiceMode : defaults.voiceMode,
     safeWriteMode: raw.safeWriteMode ?? defaults.safeWriteMode,
     outputStyle: raw.outputStyle ?? defaults.outputStyle,
     cleanupPeriodDays:
