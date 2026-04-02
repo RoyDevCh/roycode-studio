@@ -287,6 +287,20 @@ function buildInputViewport(
   }
 }
 
+function isRawHomeInput(input: string): boolean {
+  return input === '\x1b[H' || input === '\x1b[1~'
+}
+
+function isRawEndInput(input: string): boolean {
+  return input === '\x1b[F' || input === '\x1b[4~'
+}
+
+function countRawBackspaces(input: string): number {
+  const delCount = (input.match(/\x7f/g) || []).length
+  const backspaceCount = (input.match(/\x08/g) || []).length
+  return delCount + backspaceCount
+}
+
 const TuiHeader = memo(function TuiHeader(props: {
   status: string
   mode: string
@@ -490,18 +504,65 @@ const PromptComposer = memo(function PromptComposer(props: {
     }
     if (key.escape) {
       setSelectionAnchor(null)
-      return
-    }
-    if (key.ctrl && value === 'a') {
-      setSelectionAnchor(0)
-      setCursorOffset(splitChars(localInput).length)
-      return
-    }
-    if (key.ctrl) {
-      return
-    }
-    if (!props.answerMode && key.upArrow) {
-      if (!props.history.length) {
+        return
+      }
+      if (key.ctrl && value === 'a') {
+        setSelectionAnchor(0)
+        setCursorOffset(splitChars(localInput).length)
+        return
+      }
+      if (key.ctrl && value === 'h') {
+        const selection = getSelectionRange(cursorOffset, selectionAnchor)
+        const deletedSelection = deleteSelection(localInput, selection)
+        if (deletedSelection) {
+          setLocalInput(deletedSelection.value)
+          setCursorOffset(deletedSelection.cursor)
+          setSelectionAnchor(null)
+          return
+        }
+        setLocalInput(current => {
+          const next = removeBeforeCursor(current, cursorOffset)
+          setCursorOffset(next.cursor)
+          return next.value
+        })
+        setSelectionAnchor(null)
+        return
+      }
+      if (isRawHomeInput(value)) {
+        moveCursor(0, key.shift)
+        return
+      }
+      if (isRawEndInput(value)) {
+        moveCursor(splitChars(localInput).length, key.shift)
+        return
+      }
+      const rawBackspaceCount = countRawBackspaces(value)
+      if (!key.backspace && !key.delete && rawBackspaceCount > 0) {
+        const selection = getSelectionRange(cursorOffset, selectionAnchor)
+        const deletedSelection = deleteSelection(localInput, selection)
+        if (deletedSelection) {
+          setLocalInput(deletedSelection.value)
+          setCursorOffset(deletedSelection.cursor)
+          setSelectionAnchor(null)
+          return
+        }
+        let nextValue = localInput
+        let nextCursor = cursorOffset
+        for (let index = 0; index < rawBackspaceCount; index += 1) {
+          const next = removeBeforeCursor(nextValue, nextCursor)
+          nextValue = next.value
+          nextCursor = next.cursor
+        }
+        setLocalInput(nextValue)
+        setCursorOffset(nextCursor)
+        setSelectionAnchor(null)
+        return
+      }
+      if (key.ctrl) {
+        return
+      }
+      if (!props.answerMode && key.upArrow) {
+        if (!props.history.length) {
         return
       }
       setHistoryIndex(current => {
