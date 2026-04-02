@@ -186,14 +186,64 @@ function removeAtCursor(value: string, cursor: number): { value: string; cursor:
   }
 }
 
+function getSelectionRange(
+  cursor: number,
+  anchor: number | null,
+): { start: number; end: number } | null {
+  if (anchor === null || anchor === cursor) {
+    return null
+  }
+  return {
+    start: Math.min(cursor, anchor),
+    end: Math.max(cursor, anchor),
+  }
+}
+
+function replaceSelection(
+  value: string,
+  selection: { start: number; end: number } | null,
+  inserted: string,
+  fallbackCursor: number,
+): { value: string; cursor: number } {
+  if (!selection) {
+    return replaceAtCursor(value, fallbackCursor, inserted)
+  }
+  const chars = splitChars(value)
+  const nextChars = [
+    ...chars.slice(0, selection.start),
+    ...splitChars(inserted),
+    ...chars.slice(selection.end),
+  ]
+  return {
+    value: nextChars.join(''),
+    cursor: selection.start + splitChars(inserted).length,
+  }
+}
+
+function deleteSelection(
+  value: string,
+  selection: { start: number; end: number } | null,
+): { value: string; cursor: number } | null {
+  if (!selection) {
+    return null
+  }
+  const chars = splitChars(value)
+  return {
+    value: [...chars.slice(0, selection.start), ...chars.slice(selection.end)].join(''),
+    cursor: selection.start,
+  }
+}
+
 function buildInputViewport(
   value: string,
   cursor: number,
+  selection: { start: number; end: number } | null,
   maxChars: number,
 ): {
-  before: string
-  current: string
-  after: string
+  visibleChars: string[]
+  cursorInWindow: number
+  selectionStartInWindow: number | null
+  selectionEndInWindow: number | null
   leftEllipsis: boolean
   rightEllipsis: boolean
 } {
@@ -218,12 +268,20 @@ function buildInputViewport(
 
   const visible = chars.slice(start, end)
   const cursorInWindow = clamp(safeCursor - start, 0, visible.length)
-  const currentChar = visible[cursorInWindow] ?? ' '
+  const selectionStartInWindow =
+    selection && selection.end > start && selection.start < end
+      ? Math.max(0, selection.start - start)
+      : null
+  const selectionEndInWindow =
+    selection && selection.end > start && selection.start < end
+      ? Math.min(visible.length, selection.end - start)
+      : null
 
   return {
-    before: visible.slice(0, cursorInWindow).join(''),
-    current: currentChar,
-    after: visible.slice(cursorInWindow + (visible[cursorInWindow] ? 1 : 0)).join(''),
+    visibleChars: visible,
+    cursorInWindow,
+    selectionStartInWindow,
+    selectionEndInWindow,
     leftEllipsis: start > 0,
     rightEllipsis: end < chars.length,
   }
@@ -379,6 +437,22 @@ const StructuredQuestionPanel = memo(function StructuredQuestionPanel(props: {
   )
 })
 
+const ActivityPanel = memo(function ActivityPanel(props: {
+  processing: boolean
+  activity: string
+}): React.ReactElement | null {
+  if (!props.processing && !props.activity) {
+    return null
+  }
+
+  return (
+    <Box marginTop={1} borderStyle="round" borderColor="cyan" paddingX={1}>
+      <Text color="cyan">{props.processing ? 'running' : 'activity'} </Text>
+      <Text color="gray">{props.activity || 'waiting for output...'}</Text>
+    </Box>
+  )
+})
+
 const PromptComposer = memo(function PromptComposer(props: {
   answerMode: boolean
   resetKey: string
@@ -388,18 +462,42 @@ const PromptComposer = memo(function PromptComposer(props: {
   const { stdout } = useStdout()
   const [localInput, setLocalInput] = useState('')
   const [cursorOffset, setCursorOffset] = useState(0)
+  const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null)
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [draftInput, setDraftInput] = useState('')
 
   useEffect(() => {
     setLocalInput('')
     setCursorOffset(0)
+    setSelectionAnchor(null)
     setHistoryIndex(-1)
     setDraftInput('')
   }, [props.resetKey])
 
+  const moveCursor = (nextCursor: number, extendSelection: boolean) => {
+    const safeNext = clamp(nextCursor, 0, splitChars(localInput).length)
+    setCursorOffset(safeNext)
+    if (extendSelection) {
+      setSelectionAnchor(current => current ?? cursorOffset)
+    } else {
+      setSelectionAnchor(null)
+    }
+  }
+
   useInput((value, key) => {
-    if (key.ctrl || key.meta || key.tab || key.escape) {
+    if (key.meta || key.tab) {
+      return
+    }
+    if (key.escape) {
+      setSelectionAnchor(null)
+      return
+    }
+    if (key.ctrl && value === 'a') {
+      setSelectionAnchor(0)
+      setCursorOffset(splitChars(localInput).length)
+      return
+    }
+    if (key.ctrl) {
       return
     }
     if (!props.answerMode && key.upArrow) {
@@ -414,6 +512,7 @@ const PromptComposer = memo(function PromptComposer(props: {
         }
         setLocalInput(nextValue)
         setCursorOffset(splitChars(nextValue).length)
+        setSelectionAnchor(null)
         return nextIndex
       })
       return
@@ -428,38 +527,49 @@ const PromptComposer = memo(function PromptComposer(props: {
         setHistoryIndex(nextIndex)
         setLocalInput(nextValue)
         setCursorOffset(splitChars(nextValue).length)
+        setSelectionAnchor(null)
       } else {
         setHistoryIndex(-1)
         setLocalInput(draftInput)
         setCursorOffset(splitChars(draftInput).length)
+        setSelectionAnchor(null)
       }
       return
     }
     if (key.leftArrow) {
-      setCursorOffset(current => Math.max(0, current - 1))
+      moveCursor(cursorOffset - 1, key.shift)
       return
     }
     if (key.rightArrow) {
-      setCursorOffset(current => Math.min(splitChars(localInput).length, current + 1))
+      moveCursor(cursorOffset + 1, key.shift)
       return
     }
     if (key.home) {
-      setCursorOffset(0)
+      moveCursor(0, key.shift)
       return
     }
     if (key.end) {
-      setCursorOffset(splitChars(localInput).length)
+      moveCursor(splitChars(localInput).length, key.shift)
       return
     }
     if (key.return) {
       void props.onSubmit(localInput)
       setLocalInput('')
       setCursorOffset(0)
+      setSelectionAnchor(null)
       setHistoryIndex(-1)
       setDraftInput('')
       return
     }
+    const selection = getSelectionRange(cursorOffset, selectionAnchor)
     if (key.backspace || key.delete) {
+      const deletedSelection = deleteSelection(localInput, selection)
+      if (deletedSelection) {
+        setLocalInput(deletedSelection.value)
+        setCursorOffset(deletedSelection.cursor)
+        setSelectionAnchor(null)
+        return
+      }
       if (key.backspace) {
         setLocalInput(current => {
           const next = removeBeforeCursor(current, cursorOffset)
@@ -473,14 +583,14 @@ const PromptComposer = memo(function PromptComposer(props: {
           return next.value
         })
       }
+      setSelectionAnchor(null)
       return
     }
     if (value) {
-      setLocalInput(current => {
-        const next = replaceAtCursor(current, cursorOffset, value)
-        setCursorOffset(next.cursor)
-        return next.value
-      })
+      const next = replaceSelection(localInput, selection, value, cursorOffset)
+      setLocalInput(next.value)
+      setCursorOffset(next.cursor)
+      setSelectionAnchor(null)
       setHistoryIndex(-1)
     }
   })
@@ -488,16 +598,39 @@ const PromptComposer = memo(function PromptComposer(props: {
   const label = props.answerMode ? 'answer' : 'prompt'
   const labelWidth = splitChars(label).length + 3
   const availableWidth = Math.max(12, (stdout.columns || 80) - labelWidth)
-  const viewport = buildInputViewport(localInput, cursorOffset, availableWidth)
+  const selection = getSelectionRange(cursorOffset, selectionAnchor)
+  const viewport = buildInputViewport(localInput, cursorOffset, selection, availableWidth)
+  const leadingCursor = viewport.cursorInWindow === 0
+  const trailingCursor = viewport.cursorInWindow === viewport.visibleChars.length
+  const hasSelection =
+    viewport.selectionStartInWindow !== null &&
+    viewport.selectionEndInWindow !== null &&
+    viewport.selectionEndInWindow > viewport.selectionStartInWindow
 
   return (
     <Box marginTop={1} borderStyle="round" borderColor="yellow" paddingX={1}>
       <Text color="yellow">{label} </Text>
-      {viewport.leftEllipsis ? <Text color="gray">…</Text> : null}
-      {viewport.before ? <Text>{viewport.before}</Text> : null}
-      <Text inverse>{viewport.current}</Text>
-      {viewport.after ? <Text>{viewport.after}</Text> : null}
-      {viewport.rightEllipsis ? <Text color="gray">…</Text> : null}
+      {viewport.leftEllipsis ? <Text color="gray">...</Text> : null}
+      {leadingCursor ? <Text inverse> </Text> : null}
+      {viewport.visibleChars.map((char, index) => {
+        const isCursor = index === viewport.cursorInWindow && !hasSelection
+        const isSelected =
+          viewport.selectionStartInWindow !== null &&
+          viewport.selectionEndInWindow !== null &&
+          index >= viewport.selectionStartInWindow &&
+          index < viewport.selectionEndInWindow
+        return (
+          <Text
+            key={`char-${index}-${char}`}
+            inverse={isCursor || isSelected}
+            color={isSelected ? 'yellow' : undefined}
+          >
+            {char}
+          </Text>
+        )
+      })}
+      {trailingCursor ? <Text inverse> </Text> : null}
+      {viewport.rightEllipsis ? <Text color="gray">...</Text> : null}
     </Box>
   )
 })
@@ -550,6 +683,8 @@ function RoyCodeTui(): React.ReactElement {
   const [promptLabel, setPromptLabel] = useState('roycode >')
   const [showInspector, setShowInspector] = useState(false)
   const [outputEpoch, setOutputEpoch] = useState(0)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [activity, setActivity] = useState('')
   const [questionSession, setQuestionSession] = useState<StructuredQuestionSession | null>(null)
   const stateRef = useRef<CliState | null>(null)
   const stdoutBufferRef = useRef('')
@@ -607,6 +742,12 @@ function RoyCodeTui(): React.ReactElement {
       tailRef.current = parsed.nextBuffer
       tailChannelRef.current = channel
       if (parsed.lines.length) {
+        const latestLine = [...parsed.lines]
+          .reverse()
+          .find(line => line.trim().length > 0)
+        if (latestLine) {
+          setActivity(truncateText(latestLine.trim(), 140))
+        }
         pendingLogsRef.current.push(
           ...parsed.lines.map(line => ({
             channel,
@@ -670,6 +811,7 @@ function RoyCodeTui(): React.ReactElement {
         printBanner(state)
         refreshSnapshot()
         setStatus('RoyCode runtime ready')
+        setActivity('Runtime initialized')
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Failed to initialize RoyCode'
         setStatus(message)
@@ -748,10 +890,20 @@ function RoyCodeTui(): React.ReactElement {
     if (shortcutLabel) {
       setLastShortcut(shortcutLabel)
     }
-    const shouldContinue = await processInputLine(currentState, value)
-    refreshSnapshot()
-    if (!shouldContinue) {
-      await shutdownAndExit()
+    setIsProcessing(true)
+    setStatus(`Running: ${truncateText(value, 80)}`)
+    setActivity(`Submitting ${truncateText(value, 120)}`)
+    try {
+      const shouldContinue = await processInputLine(currentState, value)
+      refreshSnapshot()
+      if (!shouldContinue) {
+        await shutdownAndExit()
+        return
+      }
+      setStatus('RoyCode runtime ready')
+      setActivity(`Completed ${truncateText(value, 120)}`)
+    } finally {
+      setIsProcessing(false)
     }
   }
 
@@ -947,6 +1099,8 @@ function RoyCodeTui(): React.ReactElement {
           total={questionSession.request.questions.length}
         />
       ) : null}
+
+      <ActivityPanel processing={isProcessing} activity={activity} />
 
       <PromptComposer
         answerMode={Boolean(questionSession)}
