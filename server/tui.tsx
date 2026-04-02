@@ -136,6 +136,99 @@ function truncateText(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength - 3)}...` : value
 }
 
+function splitChars(value: string): string[] {
+  return Array.from(value)
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value))
+}
+
+function replaceAtCursor(
+  value: string,
+  cursor: number,
+  inserted: string,
+): { value: string; cursor: number } {
+  const chars = splitChars(value)
+  const safeCursor = clamp(cursor, 0, chars.length)
+  const nextChars = [
+    ...chars.slice(0, safeCursor),
+    ...splitChars(inserted),
+    ...chars.slice(safeCursor),
+  ]
+  return {
+    value: nextChars.join(''),
+    cursor: safeCursor + splitChars(inserted).length,
+  }
+}
+
+function removeBeforeCursor(value: string, cursor: number): { value: string; cursor: number } {
+  const chars = splitChars(value)
+  const safeCursor = clamp(cursor, 0, chars.length)
+  if (safeCursor === 0) {
+    return { value, cursor: safeCursor }
+  }
+  return {
+    value: [...chars.slice(0, safeCursor - 1), ...chars.slice(safeCursor)].join(''),
+    cursor: safeCursor - 1,
+  }
+}
+
+function removeAtCursor(value: string, cursor: number): { value: string; cursor: number } {
+  const chars = splitChars(value)
+  const safeCursor = clamp(cursor, 0, chars.length)
+  if (safeCursor >= chars.length) {
+    return { value, cursor: safeCursor }
+  }
+  return {
+    value: [...chars.slice(0, safeCursor), ...chars.slice(safeCursor + 1)].join(''),
+    cursor: safeCursor,
+  }
+}
+
+function buildInputViewport(
+  value: string,
+  cursor: number,
+  maxChars: number,
+): {
+  before: string
+  current: string
+  after: string
+  leftEllipsis: boolean
+  rightEllipsis: boolean
+} {
+  const chars = splitChars(value)
+  const safeCursor = clamp(cursor, 0, chars.length)
+  const viewportWidth = Math.max(8, maxChars)
+  let start = 0
+  let end = chars.length
+
+  if (chars.length > viewportWidth) {
+    start = clamp(safeCursor - Math.floor(viewportWidth * 0.6), 0, chars.length - viewportWidth)
+    end = start + viewportWidth
+    if (safeCursor > end) {
+      end = safeCursor
+      start = end - viewportWidth
+    }
+    if (safeCursor < start) {
+      start = safeCursor
+      end = start + viewportWidth
+    }
+  }
+
+  const visible = chars.slice(start, end)
+  const cursorInWindow = clamp(safeCursor - start, 0, visible.length)
+  const currentChar = visible[cursorInWindow] ?? ' '
+
+  return {
+    before: visible.slice(0, cursorInWindow).join(''),
+    current: currentChar,
+    after: visible.slice(cursorInWindow + (visible[cursorInWindow] ? 1 : 0)).join(''),
+    leftEllipsis: start > 0,
+    rightEllipsis: end < chars.length,
+  }
+}
+
 const TuiHeader = memo(function TuiHeader(props: {
   status: string
   mode: string
@@ -289,38 +382,122 @@ const StructuredQuestionPanel = memo(function StructuredQuestionPanel(props: {
 const PromptComposer = memo(function PromptComposer(props: {
   answerMode: boolean
   resetKey: string
+  history: string[]
   onSubmit: (value: string) => Promise<void>
 }): React.ReactElement {
+  const { stdout } = useStdout()
   const [localInput, setLocalInput] = useState('')
+  const [cursorOffset, setCursorOffset] = useState(0)
+  const [historyIndex, setHistoryIndex] = useState(-1)
+  const [draftInput, setDraftInput] = useState('')
 
   useEffect(() => {
     setLocalInput('')
+    setCursorOffset(0)
+    setHistoryIndex(-1)
+    setDraftInput('')
   }, [props.resetKey])
 
   useInput((value, key) => {
     if (key.ctrl || key.meta || key.tab || key.escape) {
       return
     }
+    if (!props.answerMode && key.upArrow) {
+      if (!props.history.length) {
+        return
+      }
+      setHistoryIndex(current => {
+        const nextIndex = clamp(current + 1, 0, props.history.length - 1)
+        const nextValue = props.history[nextIndex] ?? ''
+        if (current === -1) {
+          setDraftInput(localInput)
+        }
+        setLocalInput(nextValue)
+        setCursorOffset(splitChars(nextValue).length)
+        return nextIndex
+      })
+      return
+    }
+    if (!props.answerMode && key.downArrow) {
+      if (historyIndex <= -1) {
+        return
+      }
+      const nextIndex = historyIndex - 1
+      if (nextIndex >= 0) {
+        const nextValue = props.history[nextIndex] ?? ''
+        setHistoryIndex(nextIndex)
+        setLocalInput(nextValue)
+        setCursorOffset(splitChars(nextValue).length)
+      } else {
+        setHistoryIndex(-1)
+        setLocalInput(draftInput)
+        setCursorOffset(splitChars(draftInput).length)
+      }
+      return
+    }
+    if (key.leftArrow) {
+      setCursorOffset(current => Math.max(0, current - 1))
+      return
+    }
+    if (key.rightArrow) {
+      setCursorOffset(current => Math.min(splitChars(localInput).length, current + 1))
+      return
+    }
+    if (key.home) {
+      setCursorOffset(0)
+      return
+    }
+    if (key.end) {
+      setCursorOffset(splitChars(localInput).length)
+      return
+    }
     if (key.return) {
       void props.onSubmit(localInput)
       setLocalInput('')
+      setCursorOffset(0)
+      setHistoryIndex(-1)
+      setDraftInput('')
       return
     }
     if (key.backspace || key.delete) {
-      setLocalInput(current => current.slice(0, -1))
+      if (key.backspace) {
+        setLocalInput(current => {
+          const next = removeBeforeCursor(current, cursorOffset)
+          setCursorOffset(next.cursor)
+          return next.value
+        })
+      } else {
+        setLocalInput(current => {
+          const next = removeAtCursor(current, cursorOffset)
+          setCursorOffset(next.cursor)
+          return next.value
+        })
+      }
       return
     }
     if (value) {
-      setLocalInput(current => current + value)
+      setLocalInput(current => {
+        const next = replaceAtCursor(current, cursorOffset, value)
+        setCursorOffset(next.cursor)
+        return next.value
+      })
+      setHistoryIndex(-1)
     }
   })
 
-  const renderedInput = `${localInput}_`
+  const label = props.answerMode ? 'answer' : 'prompt'
+  const labelWidth = splitChars(label).length + 3
+  const availableWidth = Math.max(12, (stdout.columns || 80) - labelWidth)
+  const viewport = buildInputViewport(localInput, cursorOffset, availableWidth)
 
   return (
-    <Box marginTop={1} flexDirection="column">
-      <Text color="yellow">{props.answerMode ? 'answer' : 'prompt'}</Text>
-      <Text>{renderedInput}</Text>
+    <Box marginTop={1} borderStyle="round" borderColor="yellow" paddingX={1}>
+      <Text color="yellow">{label} </Text>
+      {viewport.leftEllipsis ? <Text color="gray">…</Text> : null}
+      {viewport.before ? <Text>{viewport.before}</Text> : null}
+      <Text inverse>{viewport.current}</Text>
+      {viewport.after ? <Text>{viewport.after}</Text> : null}
+      {viewport.rightEllipsis ? <Text color="gray">…</Text> : null}
     </Box>
   )
 })
@@ -774,6 +951,7 @@ function RoyCodeTui(): React.ReactElement {
       <PromptComposer
         answerMode={Boolean(questionSession)}
         resetKey={questionSession ? `question-${questionSession.index}` : 'prompt'}
+        history={recentHistory}
         onSubmit={submitInput}
       />
       <Box marginTop={1}>
