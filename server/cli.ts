@@ -118,6 +118,17 @@ import {
   removeRemoteTrigger,
   setRemoteTriggerEnabled,
 } from './remoteTriggers.js'
+import {
+  getGitHubIssue,
+  listGitHubIssues,
+  listPullRequestComments,
+  resolveGitHubRepo,
+} from './github.js'
+import {
+  listMagicDocs,
+  readMagicDoc,
+  searchMagicDocs,
+} from './magicDocs.js'
 import { webFetch, webSearch } from './web.js'
 import {
   applyWorkspaceBatchChanges,
@@ -1287,6 +1298,10 @@ function printHelp(): void {
       '/search <query> - search text in workspace files',
       '/web-search <query> - search the public web for current information',
       '/web-fetch <url> - fetch readable text from a public URL',
+      '/magic-docs [list [limit]|search <query>|show <path>] - inspect local markdown/text docs in the workspace',
+      '/docs ... - alias for /magic-docs',
+      '/issue [list [open|closed|all] [limit]|show <number>] - inspect GitHub issues for the current origin repo',
+      '/pr-comments <pr-number> - inspect GitHub PR comments for the current origin repo',
       '/run <command> - run a shell command in the current cwd',
       '/hooks - list configured event hooks',
       '/hook add <event> <command> [--match <text>] - add a hook',
@@ -2821,6 +2836,173 @@ async function handleWebFetchCommand(rawArgs: string): Promise<void> {
   process.stdout.write(`${dim(result.url)}\n`)
   process.stdout.write(`${dim(result.contentType)}\n\n`)
   process.stdout.write(`${result.text}\n`)
+  printDivider()
+}
+
+async function handleMagicDocsCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+
+  if (!action || action === 'list' || action === 'status') {
+    const limitToken = tokenizeQuotedArgs(rest)[0]
+    const parsedLimit = Number.parseInt(limitToken ?? '', 10)
+    const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 50) : 20
+    const docs = await listMagicDocs(state.settings.workspaceRoot, state.settings.accessMode)
+    printDivider()
+    process.stdout.write(`${label('Magic Docs')}\n`)
+    process.stdout.write(
+      `${dim(`workspace=${state.settings.workspaceRoot} total=${docs.length}`)}\n\n`,
+    )
+    if (!docs.length) {
+      process.stdout.write(`${dim('(no markdown/text docs found)')}\n`)
+    } else {
+      for (const docPath of docs.slice(0, limit)) {
+        process.stdout.write(`- ${docPath}\n`)
+      }
+      if (docs.length > limit) {
+        process.stdout.write(`\n${dim(`...and ${docs.length - limit} more`)}\n`)
+      }
+    }
+    printDivider()
+    return
+  }
+
+  if (action === 'show' || action === 'read') {
+    const requestedPath = stripWrappingQuotes(rest).trim()
+    if (!requestedPath) {
+      fail('Usage: /magic-docs show <path>')
+      return
+    }
+    const entry = await readMagicDoc(
+      state.settings.workspaceRoot,
+      requestedPath,
+      state.settings.accessMode,
+    )
+    printDivider()
+    process.stdout.write(`${label(entry.title)}\n${dim(entry.path)}\n\n${entry.content}\n`)
+    printDivider()
+    return
+  }
+
+  const query = action === 'search' ? rest.trim() : rawArgs.trim()
+  if (!query) {
+    fail('Usage: /magic-docs [list [limit]|search <query>|show <path>]')
+    return
+  }
+
+  const results = await searchMagicDocs(
+    state.settings.workspaceRoot,
+    query,
+    state.settings.accessMode,
+  )
+  printDivider()
+  process.stdout.write(`${label('Magic Docs Search')}\n`)
+  process.stdout.write(`${dim(`query=${query}`)}\n\n`)
+  if (!results.length) {
+    process.stdout.write(`${dim('(no matching docs found)')}\n`)
+  } else {
+    for (const result of results) {
+      process.stdout.write(`- ${result.path}\n`)
+      process.stdout.write(`  ${result.title}\n`)
+      if (result.snippet) {
+        process.stdout.write(`  ${dim(result.snippet)}\n`)
+      }
+    }
+  }
+  printDivider()
+}
+
+async function handleIssueCommand(state: CliState, rawArgs: string): Promise<void> {
+  const { action, rest } = parseCommandTarget(rawArgs)
+  const repo = await resolveGitHubRepo(state.settings.workspaceRoot)
+  if (!repo) {
+    fail('Current workspace origin is not a GitHub repository')
+    return
+  }
+
+  if (!action || action === 'list' || action === 'open' || action === 'closed' || action === 'all') {
+    const listArgs =
+      !action || action === 'list' ? tokenizeQuotedArgs(rest) : [action, ...tokenizeQuotedArgs(rest)]
+    const stateToken = listArgs[0]?.toLowerCase()
+    const issueState: 'open' | 'closed' | 'all' =
+      stateToken === 'closed' || stateToken === 'all' || stateToken === 'open'
+        ? stateToken
+        : 'open'
+    const parsedLimit = Number.parseInt(
+      (stateToken === issueState ? listArgs[1] : listArgs[0]) ?? '',
+      10,
+    )
+    const limit = Number.isFinite(parsedLimit) ? parsedLimit : 12
+    const result = await listGitHubIssues(state.settings.workspaceRoot, {
+      state: issueState,
+      limit,
+      includePullRequests: true,
+    })
+    printDivider()
+    process.stdout.write(`${label('GitHub Issues')}\n`)
+    process.stdout.write(
+      `${dim(`${result.repo.owner}/${result.repo.repo} state=${issueState} count=${result.issues.length}`)}\n\n`,
+    )
+    if (!result.issues.length) {
+      process.stdout.write(`${dim('(no issues found)')}\n`)
+    } else {
+      for (const issue of result.issues) {
+        const kind = issue.isPullRequest ? 'PR' : 'Issue'
+        process.stdout.write(
+          `- #${issue.number} [${issue.state}] ${issue.title} ${dim(`(${kind}, @${issue.author})`)}\n`,
+        )
+      }
+    }
+    printDivider()
+    return
+  }
+
+  const issueNumberText = action === 'show' || action === 'read' ? rest.trim() : action
+  const issueNumber = Number.parseInt(issueNumberText, 10)
+  if (!Number.isFinite(issueNumber) || issueNumber <= 0) {
+    fail('Usage: /issue [list [open|closed|all] [limit]|show <number>]')
+    return
+  }
+
+  const result = await getGitHubIssue(state.settings.workspaceRoot, issueNumber)
+  printDivider()
+  process.stdout.write(`${label(`#${result.issue.number} ${result.issue.title}`)}\n`)
+  process.stdout.write(
+    `${dim(`${result.repo.owner}/${result.repo.repo} | ${result.issue.state} | @${result.issue.author} | ${result.issue.url}`)}\n`,
+  )
+  if (result.issue.labels.length) {
+    process.stdout.write(`${dim(`labels: ${result.issue.labels.join(', ')}`)}\n`)
+  }
+  process.stdout.write('\n')
+  process.stdout.write(`${result.issue.body || dim('(empty body)')}\n`)
+  printDivider()
+}
+
+async function handlePrCommentsCommand(state: CliState, rawArgs: string): Promise<void> {
+  const pullNumber = Number.parseInt(rawArgs.trim(), 10)
+  if (!Number.isFinite(pullNumber) || pullNumber <= 0) {
+    fail('Usage: /pr-comments <pr-number>')
+    return
+  }
+
+  const result = await listPullRequestComments(state.settings.workspaceRoot, pullNumber)
+  printDivider()
+  process.stdout.write(`${label(`PR #${pullNumber} Comments`)}\n`)
+  process.stdout.write(
+    `${dim(`${result.repo.owner}/${result.repo.repo} count=${result.comments.length}`)}\n\n`,
+  )
+  if (!result.comments.length) {
+    process.stdout.write(`${dim('(no comments found)')}\n`)
+  } else {
+    for (const comment of result.comments) {
+      const location = comment.path
+        ? ` ${dim(`${comment.path}${typeof comment.line === 'number' ? `:${comment.line}` : ''}`)}`
+        : ''
+      process.stdout.write(
+        `- [${comment.kind}] @${comment.author}${location} ${dim(comment.createdAt)}\n`,
+      )
+      process.stdout.write(`  ${truncate(comment.body.replace(/\s+/g, ' '), 220)}\n`)
+    }
+  }
   printDivider()
 }
 
@@ -6041,6 +6223,8 @@ async function handleContextCommand(state: CliState): Promise<void> {
     mcpServers,
     todos,
     projectMcpJson,
+    githubRepo,
+    docs,
   ] = await Promise.all([
     listWorkspaceInstructionFiles(
       state.settings.workspaceRoot,
@@ -6063,6 +6247,8 @@ async function handleContextCommand(state: CliState): Promise<void> {
     ),
     readSessionTodos(resolveSessionTodoId(state)),
     inspectProjectMcpJson(state.settings.workspaceRoot),
+    resolveGitHubRepo(state.settings.workspaceRoot),
+    listMagicDocs(state.settings.workspaceRoot, state.settings.accessMode).catch(() => []),
   ])
 
   printDivider()
@@ -6086,6 +6272,8 @@ async function handleContextCommand(state: CliState): Promise<void> {
       `${label('plugins')} ${plugins.length}`,
       `${label('plugin-commands')} ${pluginCommands.length}`,
       `${label('mcp')} ${mcpServers.length}`,
+      `${label('docs')} ${docs.length}`,
+      `${label('github')} ${githubRepo ? `${githubRepo.owner}/${githubRepo.repo}` : '(none)'}`,
       `${label('shell-env')} ${Object.keys(getShellEnvOverrides(state.settings)).length}`,
     ].join(` ${dim('|')} `) + '\n\n',
   )
@@ -6168,6 +6356,29 @@ async function handleContextCommand(state: CliState): Promise<void> {
     )
     if (projectMcpJson.error) {
       process.stdout.write(`${red(projectMcpJson.error)}\n`)
+    }
+  }
+  process.stdout.write('\n')
+
+  process.stdout.write(`${label('GitHub Origin')}\n`)
+  if (!githubRepo) {
+    process.stdout.write(`${dim('(not a GitHub origin)')}\n`)
+  } else {
+    process.stdout.write(
+      `${githubRepo.owner}/${githubRepo.repo} ${dim(githubRepo.remoteUrl)}\n`,
+    )
+  }
+  process.stdout.write('\n')
+
+  process.stdout.write(`${label('Magic Docs')}\n`)
+  if (!docs.length) {
+    process.stdout.write(`${dim('(no markdown/text docs found)')}\n`)
+  } else {
+    for (const docPath of docs.slice(0, 12)) {
+      process.stdout.write(`- ${docPath}\n`)
+    }
+    if (docs.length > 12) {
+      process.stdout.write(`${dim(`...and ${docs.length - 12} more`)}\n`)
     }
   }
   printDivider()
@@ -6269,6 +6480,32 @@ async function handleDoctorCommand(state: CliState): Promise<void> {
     level: 'ok',
     message: `${mcpServers.length} MCP server(s) visible under current settings`,
   })
+
+  const githubRepo = await resolveGitHubRepo(state.settings.workspaceRoot)
+  if (githubRepo) {
+    findings.push({
+      level: 'ok',
+      message: `GitHub origin detected: ${githubRepo.owner}/${githubRepo.repo}`,
+    })
+  } else {
+    findings.push({
+      level: 'warn',
+      message: 'Workspace origin is not a GitHub repository; /issue and /pr-comments will be unavailable',
+    })
+  }
+
+  try {
+    const docs = await listMagicDocs(state.settings.workspaceRoot, state.settings.accessMode)
+    findings.push({
+      level: 'ok',
+      message: `${docs.length} local markdown/text documentation file(s) discovered`,
+    })
+  } catch (error) {
+    findings.push({
+      level: 'warn',
+      message: `Documentation scan failed: ${error instanceof Error ? error.message : 'unknown error'}`,
+    })
+  }
 
   findings.push({
     level: 'ok',
@@ -7844,6 +8081,19 @@ async function handleSlashCommand(state: CliState, input: string): Promise<boole
     case 'web-fetch':
     case 'webfetch':
       await handleWebFetchCommand(command.rawArgs)
+      return true
+    case 'magic-docs':
+    case 'magicdocs':
+    case 'docs':
+      await handleMagicDocsCommand(state, command.rawArgs)
+      return true
+    case 'issue':
+    case 'issues':
+      await handleIssueCommand(state, command.rawArgs)
+      return true
+    case 'pr-comments':
+    case 'prcomments':
+      await handlePrCommentsCommand(state, command.rawArgs)
       return true
     case 'run':
       await handleRunCommand(state, command.rawArgs)

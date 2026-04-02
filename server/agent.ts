@@ -112,6 +112,16 @@ import {
   fireRemoteTrigger,
   listRemoteTriggers,
 } from './remoteTriggers.js'
+import {
+  getGitHubIssue,
+  listGitHubIssues,
+  listPullRequestComments,
+} from './github.js'
+import {
+  listMagicDocs,
+  readMagicDoc,
+  searchMagicDocs,
+} from './magicDocs.js'
 import { readSessionTodos, writeSessionTodos } from './todos.js'
 import {
   addGitWorktree,
@@ -334,6 +344,106 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
             description: 'Optional search text. Omit to list all tools.',
           },
         },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_magic_docs',
+      description: 'List markdown/text documentation files discovered under the current workspace.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_magic_docs',
+      description: 'Search local markdown/text documentation files by query.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query text.' },
+          limit: {
+            type: 'number',
+            description: 'Maximum docs to return, 1-20.',
+            default: 8,
+          },
+        },
+        required: ['query'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_magic_doc',
+      description: 'Read one local markdown/text documentation file by path.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string', description: 'Relative or absolute doc path.' },
+        },
+        required: ['path'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_github_issues',
+      description: 'List GitHub issues for the current workspace origin repository.',
+      parameters: {
+        type: 'object',
+        properties: {
+          state: {
+            type: 'string',
+            enum: ['open', 'closed', 'all'],
+            description: 'Issue state filter.',
+            default: 'open',
+          },
+          limit: {
+            type: 'number',
+            description: 'Maximum issues to return, 1-50.',
+            default: 12,
+          },
+          includePullRequests: {
+            type: 'boolean',
+            description: 'Whether GitHub pull requests should be included in the list.',
+            default: true,
+          },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_github_issue',
+      description: 'Read one GitHub issue or PR by number from the current workspace origin repo.',
+      parameters: {
+        type: 'object',
+        properties: {
+          number: { type: 'number', description: 'GitHub issue or PR number.' },
+        },
+        required: ['number'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'list_pr_comments',
+      description: 'List issue and review comments for one GitHub pull request number.',
+      parameters: {
+        type: 'object',
+        properties: {
+          number: { type: 'number', description: 'Pull request number.' },
+        },
+        required: ['number'],
       },
     },
   },
@@ -1964,6 +2074,60 @@ async function executeTool(
         description: tool.function.description,
       }))
       return JSON.stringify(results, null, 2)
+    }
+    case 'list_magic_docs': {
+      const docs = await listMagicDocs(workspaceRoot, accessMode)
+      return JSON.stringify(docs, null, 2)
+    }
+    case 'search_magic_docs': {
+      const results = await searchMagicDocs(
+        workspaceRoot,
+        String(input.query ?? ''),
+        accessMode,
+        typeof input.limit === 'number' && Number.isFinite(input.limit)
+          ? input.limit
+          : 8,
+      )
+      return JSON.stringify(results, null, 2)
+    }
+    case 'read_magic_doc': {
+      const entry = await readMagicDoc(
+        workspaceRoot,
+        String(input.path ?? ''),
+        accessMode,
+      )
+      return JSON.stringify(entry, null, 2)
+    }
+    case 'list_github_issues': {
+      const result = await listGitHubIssues(workspaceRoot, {
+        state:
+          String(input.state ?? 'open') === 'closed' || String(input.state ?? 'open') === 'all'
+            ? (String(input.state) as 'closed' | 'all')
+            : 'open',
+        limit:
+          typeof input.limit === 'number' && Number.isFinite(input.limit)
+            ? input.limit
+            : undefined,
+        includePullRequests:
+          typeof input.includePullRequests === 'boolean'
+            ? input.includePullRequests
+            : true,
+      })
+      return JSON.stringify(result, null, 2)
+    }
+    case 'read_github_issue': {
+      const result = await getGitHubIssue(
+        workspaceRoot,
+        Number(input.number ?? 0),
+      )
+      return JSON.stringify(result, null, 2)
+    }
+    case 'list_pr_comments': {
+      const result = await listPullRequestComments(
+        workspaceRoot,
+        Number(input.number ?? 0),
+      )
+      return JSON.stringify(result, null, 2)
     }
     case 'list_rules': {
       const rules = await getApplicableRules(workspaceRoot, request.cwd ?? '.')

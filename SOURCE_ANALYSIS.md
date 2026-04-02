@@ -179,7 +179,9 @@ Below is the practical comparison between the recovered Claude Code snapshot and
 | Session resume/history | Yes | Yes | Saved CLI sessions, resume, title, list, delete. |
 | Permission modes | Yes | Yes | `workspace`, `unrestricted`, and quick permission presets exist locally. |
 | Git workflow | Yes | Partially | Status, diff, stage, unstage, commit are present; deeper official workflows are not fully mirrored. |
+| GitHub issue / PR discussion context | Yes | Partially | RoyCode now supports local GitHub issue listing, issue detail reads, and PR comment inspection for the current origin repo, but not the snapshot's full hosted GitHub app workflows. |
 | Web search / fetch | Yes | Yes | Public web search and readable web fetch are integrated, though some bot-protected sites can still block fetches. |
+| Local docs discovery | Partially | Yes | RoyCode now includes `MagicDocs`-style workspace markdown/text discovery, search, and document reads for repo-local documentation. |
 | React/Ink terminal UI | Yes | Partially | The original snapshot uses a richer Ink app shell; RoyCode now has an Ink-style TUI launcher with workspace/session panels, shortcut hints, recent input history, live output, and surfaced mode/theme/vim session state over its local CLI core, but it is still simpler than the original REPL app. |
 | Desktop companion | Implied | Yes | Electron desktop shell exists locally, but it is not the same product surface as official Codex/Claude desktop apps. |
 | Prompt composition | Yes | Partially | RoyCode now has segmented system-prompt building, but not the snapshot's full internal mode graph. |
@@ -208,6 +210,8 @@ What can be rebuilt locally:
 - Claude-style `-p/--print` execution plus project/user `.claude/skills`, `.claude/commands`, `.claude/rules`, `.claude/output-styles`, and agent-memory compatibility
 - install/runtime inspection commands such as local `version`, `release-notes`, and `upgrade status/run`
 - extra working-directory and shell-environment controls that keep local terminal flows flexible without forcing fully unrestricted mode
+- GitHub issue and PR discussion inspection for the current origin repo
+- local repository documentation discovery and search
 - Claude-style project/user `.claude/agents` compatibility and current-directory nested `.claude` discovery
 - resumable sessions
 - layered prompt composition

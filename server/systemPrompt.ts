@@ -43,6 +43,8 @@ function buildToolPolicy(settings: AppSettings): string {
           `- Additional allowed directories are configured: ${settings.additionalWorkspaceRoots.join(', ')}.`,
         ]
       : []),
+    '- Prefer local workspace docs before public web search when repository markdown or text documentation is likely to answer the question.',
+    '- If the workspace has a GitHub origin, issue and pull-request comment tools can provide project context from discussions and review threads.',
     ...(Object.keys(settings.shellEnv ?? {}).length
       ? [
           `- Persisted shell environment override keys are available to shell tools: ${Object.keys(settings.shellEnv ?? {}).sort().join(', ')}.`,

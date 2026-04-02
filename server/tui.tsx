@@ -25,7 +25,9 @@ type StatusSnapshot = {
   messages?: string
   attachments?: string
   workspace?: string
+  dirs?: string
   access?: string
+  env?: string
   effort?: string
   theme?: string
   vim?: string
@@ -126,7 +128,9 @@ function parseStatusSnapshot(line: string): Partial<StatusSnapshot> | null {
     ['messages', 'messages '],
     ['attachments', 'attachments '],
     ['workspace', 'workspace '],
+    ['dirs', 'dirs '],
     ['access', 'access '],
+    ['env', 'env '],
     ['effort', 'effort '],
     ['theme', 'theme '],
     ['vim', 'vim '],
@@ -416,10 +420,12 @@ function RoyCodeTui(): React.ReactElement {
             </Text>
             <Text color="gray">session: {snapshot.session ?? 'waiting for /status'}</Text>
             <Text color="gray">workspace: {snapshot.workspace ?? process.cwd()}</Text>
+            <Text color="gray">extra dirs: {snapshot.dirs ?? 'unknown'}</Text>
             <Text color="gray">cwd: {snapshot.cwd ?? '.'}</Text>
             <Text color="gray">provider: {snapshot.provider ?? 'unknown'}</Text>
             <Text color="gray">model: {snapshot.model ?? 'unknown'}</Text>
             <Text color="gray">access: {snapshot.access ?? 'unknown'}</Text>
+            <Text color="gray">env: {snapshot.env ?? 'unknown'}</Text>
             <Text color="gray">effort: {snapshot.effort ?? 'unknown'}</Text>
             <Text color="gray">theme: {snapshot.theme ?? 'unknown'}</Text>
             <Text color="gray">vim: {snapshot.vim ?? 'unknown'}</Text>

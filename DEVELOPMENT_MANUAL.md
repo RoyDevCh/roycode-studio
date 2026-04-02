@@ -182,6 +182,8 @@ Tool categories currently handled here:
 - search
 - shell
 - web search/fetch
+- local docs discovery/search
+- GitHub issue and PR discussion context
 - rules, config, output styles
 - todos
 - structured question flow
@@ -423,12 +425,30 @@ Local helper for:
 - opening URLs
 - browser search
 
+### `server/github.ts`
+
+Local GitHub context helper for:
+
+- resolving the current workspace GitHub origin from `git remote get-url origin`
+- reading auth from `GITHUB_TOKEN` / `GH_TOKEN` / `gh auth token`
+- listing issues
+- reading one issue or PR
+- listing pull-request comments
+
 ### `server/web.ts`
 
 Local public web retrieval layer:
 
 - web search
 - fetch readable webpage text
+
+### `server/magicDocs.ts`
+
+Local repository documentation helper for:
+
+- scanning markdown/text docs under the workspace
+- reading one doc file
+- lightweight ranked docs search
 
 ### `server/voice.ts`
 

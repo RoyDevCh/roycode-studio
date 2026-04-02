@@ -226,6 +226,30 @@ When prompt suggestions are enabled:
 
 `/chrome review` fetches readable page text into the terminal instead of opening a browser tab.
 
+## 9.5. Local Docs and GitHub Context
+
+### Repo documentation
+
+```bash
+/magic-docs
+/magic-docs search auth
+/magic-docs show README.md
+/docs search deployment
+```
+
+`/magic-docs` scans local markdown/text documentation under the workspace so you can inspect repository docs before using public web search.
+
+### GitHub issue and PR review context
+
+```bash
+/issue
+/issue list open 10
+/issue show 42
+/pr-comments 123
+```
+
+These commands use the current workspace `origin` remote. For private repositories, configure `GITHUB_TOKEN`/`GH_TOKEN` or log in with `gh auth login`.
+
 ## 10. Git and Pending Changes
 
 ### Git

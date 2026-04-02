@@ -62,6 +62,8 @@ Further reading:
 - RoyCode CLI now supports a dedicated `security-review` workflow for focused risk and regression auditing
 - RoyCode CLI now supports `add-dir` style extra workspace directories, so workspace mode can safely cover more than one root without switching to unrestricted access
 - RoyCode CLI now supports persisted shell environment overrides through `/env`, and these overrides flow into local shell tools across CLI, agent runs, and Web/Desktop backend commands
+- RoyCode CLI now supports local `MagicDocs`-style repo documentation discovery through `/magic-docs` and `/docs`
+- RoyCode CLI now supports local GitHub issue and PR comment inspection through `/issue` and `/pr-comments` when the workspace origin points at GitHub
 - RoyCode CLI now supports local notifications and a sleep-guard toggle for long-running workflows
 - RoyCode voice support now includes local Windows speech-to-text capture for dictated prompts
 - RoyCode CLI now supports Claude-style session helper commands such as `/session`, `/statusline`, and `/keybindings`
@@ -311,6 +313,10 @@ Useful CLI flows:
 /agent show auditor
 /context
 /doctor
+/magic-docs search auth
+/magic-docs show README.md
+/issue list open 10
+/pr-comments 123
 /rules all
 /output-style
 /output-style set explanatory
@@ -395,6 +401,8 @@ Settings sync and local trigger notes:
 - `/settings-sync import <path>` restores the bundle into the local RoyCode data directory while preserving existing provider API keys when the imported bundle contains redacted values
 - `/remote-trigger add <name> <url> [method]` stores a reusable HTTP trigger that can later be fired from the CLI or by the shared agent
 - `/chrome open <url>`, `/chrome search <query>`, and `/chrome review <url>` use the default system browser; they are lightweight local helpers, not a built-in browser engine
+- `/issue` and `/pr-comments` use the current workspace Git remote. For private repositories, set `GITHUB_TOKEN` or run `gh auth login` first
+- `/magic-docs` scans local markdown/text docs under the workspace and is useful before falling back to public web search
 
 Local MCP smoke server for testing:
 
