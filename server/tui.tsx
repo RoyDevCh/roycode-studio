@@ -8,6 +8,7 @@ import React, {
 } from 'react'
 import { Box, render, Text, useApp, useInput, useStdout } from 'ink'
 import Static from '../node_modules/ink/build/components/Static.js'
+import useStdin from '../node_modules/ink/build/hooks/use-stdin.js'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -473,12 +474,28 @@ const PromptComposer = memo(function PromptComposer(props: {
   history: string[]
   onSubmit: (value: string) => Promise<void>
 }): React.ReactElement {
+  const { stdin } = useStdin()
   const { stdout } = useStdout()
   const [localInput, setLocalInput] = useState('')
   const [cursorOffset, setCursorOffset] = useState(0)
   const [selectionAnchor, setSelectionAnchor] = useState<number | null>(null)
   const [historyIndex, setHistoryIndex] = useState(-1)
   const [draftInput, setDraftInput] = useState('')
+  const localInputRef = useRef(localInput)
+  const cursorOffsetRef = useRef(cursorOffset)
+  const selectionAnchorRef = useRef(selectionAnchor)
+
+  useEffect(() => {
+    localInputRef.current = localInput
+  }, [localInput])
+
+  useEffect(() => {
+    cursorOffsetRef.current = cursorOffset
+  }, [cursorOffset])
+
+  useEffect(() => {
+    selectionAnchorRef.current = selectionAnchor
+  }, [selectionAnchor])
 
   useEffect(() => {
     setLocalInput('')
@@ -497,6 +514,64 @@ const PromptComposer = memo(function PromptComposer(props: {
       setSelectionAnchor(null)
     }
   }
+
+  useEffect(() => {
+    const handleRawInput = (chunk: Buffer | string) => {
+      if (props.answerMode) {
+        return
+      }
+      const input = typeof chunk === 'string' ? chunk : chunk.toString('utf8')
+      if (!input) {
+        return
+      }
+
+      const currentValue = localInputRef.current
+      const currentCursor = cursorOffsetRef.current
+      const currentAnchor = selectionAnchorRef.current
+      const selection = getSelectionRange(currentCursor, currentAnchor)
+
+      if (isRawHomeInput(input)) {
+        setCursorOffset(0)
+        setSelectionAnchor(null)
+        return
+      }
+
+      if (isRawEndInput(input)) {
+        setCursorOffset(splitChars(currentValue).length)
+        setSelectionAnchor(null)
+        return
+      }
+
+      const rawBackspaceCount = countRawBackspaces(input)
+      if (rawBackspaceCount <= 0) {
+        return
+      }
+
+      const deletedSelection = deleteSelection(currentValue, selection)
+      if (deletedSelection) {
+        setLocalInput(deletedSelection.value)
+        setCursorOffset(deletedSelection.cursor)
+        setSelectionAnchor(null)
+        return
+      }
+
+      let nextValue = currentValue
+      let nextCursor = currentCursor
+      for (let index = 0; index < rawBackspaceCount; index += 1) {
+        const next = removeBeforeCursor(nextValue, nextCursor)
+        nextValue = next.value
+        nextCursor = next.cursor
+      }
+      setLocalInput(nextValue)
+      setCursorOffset(nextCursor)
+      setSelectionAnchor(null)
+    }
+
+    stdin.on('data', handleRawInput)
+    return () => {
+      stdin.off('data', handleRawInput)
+    }
+  }, [props.answerMode, stdin])
 
   useInput((value, key) => {
     if (key.meta || key.tab) {
