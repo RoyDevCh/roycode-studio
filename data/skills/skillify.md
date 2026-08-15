@@ -1,5 +1,5 @@
 ---
-description: Turn a repeatable workflow from the current session into a reusable Claude-style skill.
+description: Turn a repeatable workflow from the current session into a reusable local skill.
 allowed-tools:
   - Read
   - Write
@@ -23,7 +23,7 @@ Convert a repeatable process into a reusable skill.
    - ordered steps
    - success criteria
    - hard rules or user preferences
-3. Draft a `SKILL.md` with Claude-style frontmatter:
+3. Draft a `SKILL.md` with frontmatter:
    - `description`
    - `allowed-tools`
    - `when_to_use`

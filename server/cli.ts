@@ -181,7 +181,7 @@ import {
   type AgentMemoryScope,
   type LocalRuleDocument,
   type LocalOutputStyleDocument,
-} from './claudeCompat.js'
+} from './localCompat.js'
 import {
   getCompatConfigValue,
   listSupportedConfigEntries,
@@ -1446,7 +1446,7 @@ export function printBanner(state: CliState): void {
   printDivider()
   writeStdout(`${label('RoyCode CLI')}\n`)
   writeStdout(
-    `${dim('Claude Code style terminal workflow built on the local RoyCode agent core.')}\n`,
+    `${dim('Terminal-first workflow built on the local RoyCode agent core.')}\n`,
   )
   writeStdout(
     `${dim('Type /help for commands. Type /multiline for pasted blocks. Normal input sends a prompt. Hooks, skills, and tasks are available.')}\n`,
@@ -1493,7 +1493,7 @@ function printCliUsage(): void {
       'Options:',
       '  --help                 Show CLI help',
       '  --prompt <text>        Run one prompt and exit',
-      '  -p, --print <text>     Claude-style print mode (plain final answer)',
+      '  -p, --print <text>     Print mode (plain final answer)',
       '  --plain                Force the direct line-based CLI instead of the native TUI',
       '  --web-search <query>   Run one web search and exit',
       '  --web-fetch <url>      Fetch one public URL and exit',
@@ -1509,10 +1509,10 @@ function printCliUsage(): void {
       '  --unsafe-write         Disable approval mode',
       '  --cwd <path>           Set default tool cwd',
       '  --attach <path>        Attach a file to the next prompt (repeatable)',
-      '  --allowedTools <list>  Claude compatibility flag (currently advisory only)',
+      '  --allowedTools <list>  Compatibility flag (currently advisory only)',
       '  --append-system-prompt <text>',
       '                         Append one extra system prompt section (repeatable)',
-      '  --output-format <fmt>  Claude compatibility flag (text/json), text supported',
+      '  --output-format <fmt>  Compatibility flag (text/json), text supported',
       '  --resume [id|latest]   Resume a saved CLI session',
       '  --list-sessions        List saved sessions',
       '  --title <text>         Set the current session title',
@@ -1584,9 +1584,9 @@ function printHelp(): void {
       '/hook clear <event> - remove hooks for one event',
       '/hook remove <id> - remove one hook by id',
       '/skills - list local skills',
-      '/commands - list auto-loaded Claude-style slash commands and plugin commands',
-      '/commands show <name> - preview one local Claude-style command',
-      '/agents - list auto-loaded Claude-style subagents',
+      '/commands - list auto-loaded local slash commands and plugin commands',
+      '/commands show <name> - preview one local command',
+      '/agents - list auto-loaded local subagents',
       '/agent show <name> - inspect one local subagent definition',
       '/agent run <name> <prompt> - run one local subagent in isolation',
       '/skill use <name> - activate a skill for this session',
@@ -1601,11 +1601,11 @@ function printHelp(): void {
       '/plugin commands [plugin] - list plugin commands',
       '/plugin show <name> - preview one plugin command',
       '/instructions - show auto-loaded workspace instruction files',
-      '/context - inspect the currently loaded Claude-style context layers',
+      '/context - inspect the currently loaded context layers',
       '/ctx-viz - alias for /context',
       '/doctor - run local health checks for workspace, output styles, providers, and MCP',
-      '/rules - list applicable Claude-style rule documents',
-      '/rules all - list every discovered Claude-style rule document',
+      '/rules - list applicable rule documents',
+      '/rules all - list every discovered rule document',
       '/rules show <name> - preview one rule document',
       '/memory - show workspace memory',
       '/memory set <text> - replace workspace memory',
@@ -2033,12 +2033,12 @@ function printCompatCommandList(
   pluginCommands: Array<{ name: string; description: string; pluginName?: string }>,
 ): void {
   if (!localCommands.length && !pluginCommands.length) {
-    info('No Claude-style slash commands found.')
+    info('No local slash commands found.')
     return
   }
 
   if (localCommands.length) {
-    writeStdout(`${label('Local Claude Commands')}\n`)
+    writeStdout(`${label('Local Commands')}\n`)
     for (const command of localCommands) {
       const sourceLabel = command.source ? ` ${dim(`[${command.source}]`)}` : ''
       writeStdout(`- ${command.name}${sourceLabel} ${dim(command.summary)}\n`)
@@ -2273,7 +2273,7 @@ function resolveSessionTodoId(state: CliState): string {
 
 function printRuleList(rules: LocalRuleDocument[]): void {
   if (!rules.length) {
-    info('No Claude-style rules matched the current workspace and cwd')
+    info('No rules matched the current workspace and cwd')
     return
   }
 
@@ -2293,7 +2293,7 @@ function printOutputStyleDocs(
   }>,
 ): void {
   if (!styles.length) {
-    info('No custom Claude-style output styles found')
+    info('No custom output styles found')
     return
   }
 

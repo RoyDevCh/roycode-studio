@@ -1,5 +1,5 @@
 ---
-description: Diagnose a stuck, slow, or frozen Claude Code or RoyCode session on this machine.
+description: Diagnose a stuck, slow, or frozen RoyCode session on this machine.
 allowed-tools:
   - Read
   - Grep
@@ -11,7 +11,7 @@ user-invocable: true
 ---
 # Stuck
 
-Investigate whether a local RoyCode or Claude-style session is stuck.
+Investigate whether a local RoyCode session is stuck.
 
 ## Workflow
 

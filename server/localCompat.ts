@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { parseMarkdownFrontmatter } from './commandCompat.js'
 
-export type ClaudeCompatSource = 'workspace-claude' | 'user-claude'
+export type LocalCompatSource = 'workspace' | 'user'
 
 export type LocalRuleDocument = {
   name: string
@@ -12,7 +12,7 @@ export type LocalRuleDocument = {
   description: string
   content: string
   paths?: string[]
-  source: ClaudeCompatSource
+  source: LocalCompatSource
 }
 
 export type LocalOutputStyleDocument = {
@@ -21,7 +21,7 @@ export type LocalOutputStyleDocument = {
   description: string
   prompt: string
   keepCodingInstructions?: boolean
-  source: ClaudeCompatSource
+  source: LocalCompatSource
 }
 
 export type AgentMemoryScope = 'user' | 'project' | 'local'
@@ -33,15 +33,15 @@ export type AgentMemoryDocument = {
   content: string
 }
 
-const USER_CLAUDE_RULES_DIR = process.env.ROYCODE_CLAUDE_RULES_DIR
+const USER_COMPAT_RULES_DIR = process.env.ROYCODE_CLAUDE_RULES_DIR
   ? path.resolve(process.env.ROYCODE_CLAUDE_RULES_DIR)
   : path.join(os.homedir(), '.claude', 'rules')
 
-const USER_CLAUDE_OUTPUT_STYLES_DIR = process.env.ROYCODE_CLAUDE_OUTPUT_STYLES_DIR
+const USER_COMPAT_OUTPUT_STYLES_DIR = process.env.ROYCODE_CLAUDE_OUTPUT_STYLES_DIR
   ? path.resolve(process.env.ROYCODE_CLAUDE_OUTPUT_STYLES_DIR)
   : path.join(os.homedir(), '.claude', 'output-styles')
 
-const USER_CLAUDE_AGENT_MEMORY_DIR = process.env.ROYCODE_CLAUDE_AGENT_MEMORY_DIR
+const USER_COMPAT_AGENT_MEMORY_DIR = process.env.ROYCODE_CLAUDE_AGENT_MEMORY_DIR
   ? path.resolve(process.env.ROYCODE_CLAUDE_AGENT_MEMORY_DIR)
   : path.join(os.homedir(), '.claude', 'agent-memory')
 
@@ -211,7 +211,7 @@ function pathMatchesPatterns(targetPath: string, patterns: string[]): boolean {
 
 async function loadRuleDocumentsFromRoot(
   rootPath: string,
-  source: ClaudeCompatSource,
+  source: LocalCompatSource,
 ): Promise<LocalRuleDocument[]> {
   const files = await walkMarkdownFiles(rootPath)
   const deduped = new Map<string, LocalRuleDocument>()
@@ -244,15 +244,15 @@ export async function listLocalRules(
 ): Promise<LocalRuleDocument[]> {
   const deduped = new Map<string, LocalRuleDocument>()
   const roots = [
-    { rootPath: USER_CLAUDE_RULES_DIR, source: 'user-claude' as const },
+    { rootPath: USER_COMPAT_RULES_DIR, source: 'user' as const },
     ...buildProjectRoots(workspaceRoot, cwd, 'rules').map(rootPath => ({
       rootPath,
-      source: 'workspace-claude' as const,
+      source: 'workspace' as const,
     })),
   ]
 
   for (const root of roots) {
-    if (root.source === 'user-claude') {
+    if (root.source === 'user') {
       await mkdir(root.rootPath, { recursive: true })
     }
     const documents = await loadRuleDocumentsFromRoot(root.rootPath, root.source)
@@ -286,7 +286,7 @@ export async function getApplicableRules(
 
 async function loadOutputStylesFromRoot(
   rootPath: string,
-  source: ClaudeCompatSource,
+  source: LocalCompatSource,
 ): Promise<LocalOutputStyleDocument[]> {
   const files = await walkMarkdownFiles(rootPath)
   const documents = new Map<string, LocalOutputStyleDocument>()
@@ -323,13 +323,13 @@ export async function listLocalOutputStyles(
   const roots = [
     ...buildProjectRoots(workspaceRoot, cwd, 'output-styles').map(rootPath => ({
       rootPath,
-      source: 'workspace-claude' as const,
+      source: 'workspace' as const,
     })),
-    { rootPath: USER_CLAUDE_OUTPUT_STYLES_DIR, source: 'user-claude' as const },
+    { rootPath: USER_COMPAT_OUTPUT_STYLES_DIR, source: 'user' as const },
   ]
 
   for (const root of roots) {
-    if (root.source === 'user-claude') {
+    if (root.source === 'user') {
       await mkdir(root.rootPath, { recursive: true })
     }
     const documents = await loadOutputStylesFromRoot(root.rootPath, root.source)
@@ -383,7 +383,7 @@ function getAgentMemoryPathForScope(
   const currentDir = resolveCurrentDirectory(workspaceRoot, cwd)
   switch (scope) {
     case 'user':
-      return path.join(USER_CLAUDE_AGENT_MEMORY_DIR, normalizedAgent, 'MEMORY.md')
+      return path.join(USER_COMPAT_AGENT_MEMORY_DIR, normalizedAgent, 'MEMORY.md')
     case 'project':
       return path.join(currentDir, '.claude', 'agent-memory', normalizedAgent, 'MEMORY.md')
     case 'local':

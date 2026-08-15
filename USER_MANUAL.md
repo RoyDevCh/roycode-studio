@@ -2,14 +2,14 @@
 
 ## 1. What RoyCode Is
 
-RoyCode is a local AI coding workspace inspired by Claude Code. It has four main surfaces:
+RoyCode is a local multi-model AI coding workspace with four main surfaces:
 
 - `roycode`: the default terminal-first TUI launcher
 - `roycode --plain`: the direct line-based CLI
 - WebUI: browser app backed by the local Express server
 - Desktop app: Electron shell around the same local backend
 
-The CLI/TUI is the most complete surface and is the closest to the Claude Code style workflow.
+The CLI/TUI is the most complete surface and is the closest to a dedicated terminal-first coding agent.
 
 ## 2. Install and First Run
 
@@ -50,7 +50,7 @@ npm run desktop
 
 ### `roycode`
 
-Launches the native single-process TUI by default. This is the closest mode to the Claude Code style terminal experience.
+Launches the native single-process TUI by default. This is the closest mode to a dedicated terminal-first coding agent.
 
 ### `roycode --plain`
 
@@ -337,7 +337,7 @@ RoyCode currently supports a local TypeScript/JavaScript LSP subset.
 /skill import <path> [name]
 ```
 
-### Claude-style command compatibility
+### Local command compatibility
 
 ```bash
 /commands
@@ -618,7 +618,7 @@ The WebUI is great for:
 - multi-session chat
 - terminal panel work
 
-The CLI/TUI is still the most complete Claude-style surface.
+The CLI/TUI is still the most complete terminal-first surface.
 
 ## 21. Troubleshooting
 

@@ -22,13 +22,13 @@ const DATA_DIR = process.env.ROYCODE_DATA_DIR
 const SKILLS_DIR = process.env.ROYCODE_SKILLS_DIR
   ? path.resolve(process.env.ROYCODE_SKILLS_DIR)
   : path.join(DATA_DIR, 'skills')
-const USER_CLAUDE_SKILLS_DIR = process.env.ROYCODE_CLAUDE_SKILLS_DIR
+const USER_COMPAT_SKILLS_DIR = process.env.ROYCODE_CLAUDE_SKILLS_DIR
   ? path.resolve(process.env.ROYCODE_CLAUDE_SKILLS_DIR)
   : path.join(os.homedir(), '.claude', 'skills')
 
 export type LocalSkillSource =
-  | 'workspace-claude'
-  | 'user-claude'
+  | 'workspace'
+  | 'user'
   | 'roycode-data'
   | 'plugin'
 
@@ -154,8 +154,8 @@ function buildSkillRoots(
   const roots: Array<{ rootPath: string; source: Exclude<LocalSkillSource, 'plugin'> }> = []
 
   roots.push({
-    rootPath: USER_CLAUDE_SKILLS_DIR,
-    source: 'user-claude',
+    rootPath: USER_COMPAT_SKILLS_DIR,
+    source: 'user',
   })
 
   if (workspaceRoot) {
@@ -172,7 +172,7 @@ function buildSkillRoots(
       while (true) {
         roots.push({
           rootPath: path.join(current, '.claude', 'skills'),
-          source: 'workspace-claude',
+          source: 'workspace',
         })
         if (current === normalizedRoot) {
           break
@@ -186,7 +186,7 @@ function buildSkillRoots(
     } else {
       roots.push({
         rootPath: path.join(normalizedRoot, '.claude', 'skills'),
-        source: 'workspace-claude',
+        source: 'workspace',
       })
     }
   }

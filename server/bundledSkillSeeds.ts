@@ -120,7 +120,7 @@ Review durable instructions and memory for this workspace.
 $ARGUMENTS
 `,
   'update-config.md': `---
-description: Update Claude-style settings, hooks, permissions, or RoyCode-compatible local configuration carefully.
+description: Update local settings, hooks, permissions, or RoyCode-compatible configuration carefully.
 allowed-tools:
   - Read
   - Write
@@ -169,7 +169,7 @@ If the user wants something to happen automatically in response to an event, pre
 $ARGUMENTS
 `,
   'stuck.md': `---
-description: Diagnose a stuck, slow, or frozen Claude Code or RoyCode session on this machine.
+description: Diagnose a stuck, slow, or frozen RoyCode session on this machine.
 allowed-tools:
   - Read
   - Grep
@@ -181,7 +181,7 @@ user-invocable: true
 ---
 # Stuck
 
-Investigate whether a local RoyCode or Claude-style session is stuck.
+Investigate whether a local RoyCode session is stuck.
 
 ## Workflow
 
@@ -209,7 +209,7 @@ Investigate whether a local RoyCode or Claude-style session is stuck.
 $ARGUMENTS
 `,
   'skillify.md': `---
-description: Turn a repeatable workflow from the current session into a reusable Claude-style skill.
+description: Turn a repeatable workflow from the current session into a reusable local skill.
 allowed-tools:
   - Read
   - Write
@@ -233,7 +233,7 @@ Convert a repeatable process into a reusable skill.
    - ordered steps
    - success criteria
    - hard rules or user preferences
-3. Draft a \`SKILL.md\` with Claude-style frontmatter:
+3. Draft a \`SKILL.md\` with frontmatter:
    - \`description\`
    - \`allowed-tools\`
    - \`when_to_use\`
@@ -299,7 +299,7 @@ Coordinate a large change in parallel.
 $ARGUMENTS
 `,
   'debug.md': `---
-description: Diagnose a RoyCode or Claude-style issue by inspecting logs, settings, commands, and recent behavior.
+description: Diagnose a RoyCode issue by inspecting logs, settings, commands, and recent behavior.
 allowed-tools:
   - Read
   - Grep
@@ -338,18 +338,18 @@ Investigate the issue and explain likely causes in plain language.
 $ARGUMENTS
 `,
   'keybindings.md': `---
-description: Create or update Claude-style keybindings.json safely without overwriting unrelated bindings.
+description: Create or update keybindings.json safely without overwriting unrelated bindings.
 allowed-tools:
   - Read
   - Write
   - Edit
-when_to_use: Use when the user wants to customize Claude-style keybindings or inspect an existing keybindings.json file.
+when_to_use: Use when the user wants to customize keybindings or inspect an existing keybindings.json file.
 argument-hint: "[binding change request]"
 user-invocable: true
 ---
 # Keybindings
 
-Update Claude-style keybindings carefully.
+Update keybindings carefully.
 
 ## Workflow
 

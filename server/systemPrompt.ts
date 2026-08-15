@@ -1,5 +1,5 @@
 import type { AppSettings, ChatRequest } from './types.js'
-import { getApplicableRules } from './claudeCompat.js'
+import { getApplicableRules } from './localCompat.js'
 import { listLocalCompatCommands } from './localCommands.js'
 import { listLocalAgents } from './localAgents.js'
 import { listMcpServers } from './mcp.js'
@@ -166,7 +166,7 @@ async function buildAvailableSkillsSection(
 
   if (localCommands.length) {
     pushWithinBudget(lines, '', budget)
-    pushWithinBudget(lines, 'Local Claude-style commands:', budget)
+    pushWithinBudget(lines, 'Local slash commands:', budget)
     for (const command of localCommands) {
       if (
         !pushWithinBudget(

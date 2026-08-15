@@ -100,7 +100,7 @@ async function readContextFile(targetPath: string): Promise<string | null> {
   }
 }
 
-function buildNestedClaudeInstructionCandidates(workspaceRoot: string): Array<{
+function buildNestedInstructionCandidates(workspaceRoot: string): Array<{
   relativePath: string
   label: string
 }> {
@@ -162,7 +162,7 @@ export async function listWorkspaceInstructionFiles(
       relativePath: '.github/copilot-instructions.md',
       label: '.github/copilot-instructions.md',
     },
-    ...buildNestedClaudeInstructionCandidates(root),
+    ...buildNestedInstructionCandidates(root),
   ]
 
   const output: WorkspaceContextFile[] = []

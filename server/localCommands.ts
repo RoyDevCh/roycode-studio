@@ -9,11 +9,11 @@ import {
 } from './commandCompat.js'
 import type { AccessMode } from './types.js'
 
-const USER_CLAUDE_COMMANDS_DIR = process.env.ROYCODE_CLAUDE_COMMANDS_DIR
+const USER_COMPAT_COMMANDS_DIR = process.env.ROYCODE_CLAUDE_COMMANDS_DIR
   ? path.resolve(process.env.ROYCODE_CLAUDE_COMMANDS_DIR)
   : path.join(os.homedir(), '.claude', 'commands')
 
-export type LocalCommandSource = 'workspace-claude' | 'user-claude'
+export type LocalCommandSource = 'workspace' | 'user'
 
 export type LocalCommandDocument = {
   name: string
@@ -109,8 +109,8 @@ function buildCommandRoots(
 ): Array<{ rootPath: string; source: LocalCommandSource }> {
   const roots: Array<{ rootPath: string; source: LocalCommandSource }> = []
   roots.push({
-    rootPath: USER_CLAUDE_COMMANDS_DIR,
-    source: 'user-claude',
+    rootPath: USER_COMPAT_COMMANDS_DIR,
+    source: 'user',
   })
   if (workspaceRoot) {
     const normalizedRoot = path.resolve(workspaceRoot)
@@ -126,7 +126,7 @@ function buildCommandRoots(
       while (true) {
         roots.push({
           rootPath: path.join(current, '.claude', 'commands'),
-          source: 'workspace-claude',
+          source: 'workspace',
         })
         if (current === normalizedRoot) {
           break
@@ -140,7 +140,7 @@ function buildCommandRoots(
     } else {
       roots.push({
         rootPath: path.join(normalizedRoot, '.claude', 'commands'),
-        source: 'workspace-claude',
+        source: 'workspace',
       })
     }
   }
@@ -180,7 +180,7 @@ async function loadLocalCommandDocuments(
   const deduped = new Map<string, LocalCommandDocument>()
 
   for (const root of buildCommandRoots(workspaceRoot, cwd)) {
-    if (root.source === 'user-claude') {
+    if (root.source === 'user') {
       await mkdir(root.rootPath, { recursive: true })
     }
     const documents = await loadCommandDocumentsFromRoot(root.rootPath, root.source)

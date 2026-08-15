@@ -1,5 +1,5 @@
 ---
-description: Update Claude-style settings, hooks, permissions, or RoyCode-compatible local configuration carefully.
+description: Update local settings, hooks, permissions, or RoyCode-compatible configuration carefully.
 allowed-tools:
   - Read
   - Write

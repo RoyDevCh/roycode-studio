@@ -1,6 +1,6 @@
 # RoyCode Studio
 
-RoyCode Studio is a personal WebUI coding workspace built next to the Claude Code source snapshot in this repo. The goal is not to rebuild the leaked CLI exactly as-is, but to turn the useful ideas in that snapshot into a practical multi-model coding tool with a browser interface.
+RoyCode Studio is a personal multi-model coding workspace with a browser interface, a terminal-first CLI/TUI, and a desktop shell. It is an original implementation of a modern coding-agent runtime with local tools, skills, hooks, background tasks, and a WebUI.
 
 Further reading:
 
@@ -19,17 +19,17 @@ Further reading:
 - A dedicated Git dock with branch/status, diff preview, stage/unstage, attach-changed-file, and commit actions
 - An Electron desktop shell with a native app window, app menu, and local backend boot
 - Desktop builds now compile the backend into `dist-server/` and can produce a portable Windows executable
-- A terminal-first `RoyCode CLI` that behaves much closer to Claude Code than the WebUI does
+- A terminal-first `RoyCode CLI` with a native coding-agent workflow, much closer to a dedicated terminal product than the WebUI is
 - The `roycode` launcher now defaults to the native single-process TUI, while `roycode --plain` opens the direct line-based CLI explicitly
 - RoyCode CLI now supports saved sessions, `/resume`, `/title`, `/sessions`, and one-shot `--prompt` runs
-- RoyCode CLI now supports Claude-style `-p` / `--print` runs with optional JSON output
+- RoyCode CLI now supports `-p` / `--print` one-shot runs with optional JSON output
 - RoyCode CLI includes local slash commands for files, search, shell, pending changes, Git, provider/model switching, and review/fix/plan/explain macros
 - RoyCode CLI and the shared agent now include built-in `web_search` and `web_fetch` support for current information and public docs lookup
 - RoyCode CLI now supports local `skills`, event `hooks`, and background `tasks` for a more agent-like terminal workflow
-- RoyCode now auto-loads Claude-style project `.claude/skills`, user `~/.claude/skills`, and project/user `.claude/commands`
-- RoyCode now auto-loads Claude-style project/user `.claude/agents` and can run them as local subagents
-- RoyCode now follows Claude-style source priority more closely, with user-level `.claude` entries overriding project-level entries and nested project directories being discovered from the current `cwd`
-- RoyCode now supports Claude-style `.claude/rules`, `.claude/output-styles`, and `.claude/agent-memory`, including nested project discovery from the current `cwd`
+- RoyCode now auto-loads project `.claude/skills`, user `~/.claude/skills`, and project/user `.claude/commands`
+- RoyCode now auto-loads project/user `.claude/agents` and can run them as local subagents
+- RoyCode now follows a layered source priority, with user-level `.claude` entries overriding project-level entries and nested project directories being discovered from the current `cwd`
+- RoyCode now supports `.claude/rules`, `.claude/output-styles`, and `.claude/agent-memory`, including nested project discovery from the current `cwd`
 - RoyCode now supports project `.mcp.json` auto-discovery and can merge those MCP servers with RoyCode's saved local MCP registry
 - RoyCode now supports plugin-provided output styles from `output-styles/*.md`, in addition to built-in and `.claude/output-styles` styles
 - RoyCode now includes a local git `worktree` workflow, worktree inspection, switching shortcuts, and `teleport` shortcuts for moving the session into another worktree quickly
@@ -38,7 +38,7 @@ Further reading:
 - RoyCode now includes a self-hosted `bridge` layer that can talk to another RoyCode server over HTTP for health, context, and remote command execution
 - RoyCode now includes a self-hosted `marketplace` registry for installable local skills or plugins from a path or git URL
 - RoyCode now includes a local TypeScript/JavaScript `LSP` subset for diagnostics, definitions, implementations, references, rename preview, rename apply, hover, document symbols, and workspace symbols
-- RoyCode now ships a bundled local skill set adapted from the source snapshot, including `simplify`, `verify`, `remember`, `update-config`, `skillify`, `batch`, `debug`, `keybindings`, `stuck`, `lorem-ipsum`, and `claude-api`
+- RoyCode now ships a bundled local skill set, including `simplify`, `verify`, `remember`, `update-config`, `skillify`, `batch`, `debug`, `keybindings`, `stuck`, `lorem-ipsum`, and `claude-api`
 - RoyCode CLI now supports local plugins with markdown command loading, direct `/plugin-name:command` execution, and plugin-provided skills
 - RoyCode now supports user-configured local MCP servers over `stdio` and Streamable HTTP, including MCP tools, prompts, and resources
 - RoyCode now supports structured in-terminal follow-up questions through the shared `ask_user_question` tool path, so a running agent can request constrained answers instead of only free-form text
@@ -48,12 +48,12 @@ Further reading:
 - RoyCode now builds a richer segmented system prompt with workspace instructions, workspace memory, task policy, skill policy, and runtime policy sections
 - RoyCode can auto-load workspace instruction files such as `CLAUDE.md`, `ROYCODE.md`, `.claude/INSTRUCTIONS.md`, and `.github/copilot-instructions.md`
 - RoyCode includes persistent workspace memory files and CLI memory commands so stable project context can survive across sessions
-- RoyCode CLI now supports Claude-style `/context`, `/doctor`, `/config`, `/rules`, `/output-style`, `/agent-memory`, and `/todos`
-- The shared agent now exposes Claude-style compatibility helpers such as `skill`, `present_files`, `run_subagent`, `list_skills`, `read_skill`, `list_tasks`, `get_task`, and `create_task`
+- RoyCode CLI now supports `/context`, `/doctor`, `/config`, `/rules`, `/output-style`, `/agent-memory`, and `/todos`
+- The shared agent now exposes compatibility helpers such as `skill`, `present_files`, `run_subagent`, `list_skills`, `read_skill`, `list_tasks`, `get_task`, and `create_task`
 - The shared agent now also exposes `tool_search`, `list_rules`, `read_rule`, `list_output_styles`, `get_config`, `set_config`, `read_todos`, `todo_write`, `list_commands`, and `read_command`
-- Claude-style `allowed-tools`, `tools`, and `disallowedTools` names such as `Read`, `Grep`, `Bash`, `WebFetch`, and `Agent` are now mapped onto RoyCode's local tool names
+- `allowed-tools`, `tools`, and `disallowedTools` names such as `Read`, `Grep`, `Bash`, `WebFetch`, and `Agent` are now mapped onto RoyCode's local tool names
 - RoyCode CLI supports pasted multi-line input via `/multiline` and non-interactive stdin piping for scripted use
-- RoyCode CLI now supports Claude-style conversation workflow commands such as `/compact`, `/rewind`, and `/export`
+- RoyCode CLI now supports conversation workflow commands such as `/compact`, `/rewind`, and `/export`
 - RoyCode CLI now also supports conversation branching, session summaries, and local history insights through `/branch`, `/summary`, `/thinkback`, and `/insights`
 - RoyCode CLI now supports local theme and vim-mode preferences through `/theme` and `/vim`
 - RoyCode CLI now supports local brief-mode and voice-mode preferences through `/brief` and `/voice`
@@ -66,7 +66,7 @@ Further reading:
 - RoyCode CLI now supports local GitHub issue and PR comment inspection through `/issue` and `/pr-comments` when the workspace origin points at GitHub
 - RoyCode CLI now supports local notifications and a sleep-guard toggle for long-running workflows
 - RoyCode voice support now includes local Windows speech-to-text capture for dictated prompts
-- RoyCode CLI now supports Claude-style session helper commands such as `/session`, `/statusline`, and `/keybindings`
+- RoyCode CLI now supports session helper commands such as `/session`, `/statusline`, and `/keybindings`
 - RoyCode CLI now includes a local control plane for feature flags, policy profiles, privacy mode, diagnostics, trace capture, extra usage inspection, and debug/admin-style terminal commands
 - RoyCode background tasks now support output inspection, prompt updates, cancellation, and restart flows from both the CLI and the shared agent tools
 - RoyCode teams now support per-member inbox messages, shared team memory, memory sync from recent team messages, and secret scanning before memory writes
@@ -78,7 +78,7 @@ Further reading:
 - RoyCode now also includes local runtime statistics, usage logging, cost estimation summaries, and top-tool usage buckets
 - RoyCode MCP management now supports server inspection plus persisted header, bearer-token, and environment-variable edits for saved servers
 - RoyCode CLI now includes local `ctx-viz`, `terminal-setup`, and `desktop` helper commands for inspecting loaded context and local launch/install entry points
-- RoyCode hooks now accept JSON stdin and structured JSON stdout so hooks can emit `systemMessage`, block execution, attach extra context, mutate prompt input, and filter by matcher text or regex more like Claude Code hooks
+- RoyCode hooks now accept JSON stdin and structured JSON stdout so hooks can emit `systemMessage`, block execution, attach extra context, mutate prompt input, and filter by matcher text or regex
 - Sidebar project rail for quick workspace switching, with a chat list that behaves more like a project tree + session tree
 - Project rail now supports search, favorites, and recent-project grouping
 - Project nodes in the sidebar can expand to reveal their recent chats, so the left rail behaves more like a project tree + session tree
@@ -376,7 +376,7 @@ Useful CLI flows:
 /tasks
 ```
 
-Claude-style compatibility notes:
+Compatibility notes:
 
 - Project-local skills: `.claude/skills/**/SKILL.md` and `.claude/skills/**/*.md`
 - User-local skills: `~/.claude/skills/**/SKILL.md` and `~/.claude/skills/**/*.md`

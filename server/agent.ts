@@ -75,7 +75,7 @@ import {
   getApplicableRules,
   listLocalRules,
   readAgentMemory,
-} from './claudeCompat.js'
+} from './localCompat.js'
 import { getOutputStyleConfig, listAvailableOutputStyles } from './outputStyles.js'
 import {
   getCompatConfigValue,
@@ -453,7 +453,7 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
     type: 'function',
     function: {
       name: 'list_rules',
-      description: 'List Claude-style rule documents available for the current workspace and cwd.',
+      description: 'List rule documents available for the current workspace and cwd.',
       parameters: {
         type: 'object',
         properties: {},
@@ -464,7 +464,7 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
     type: 'function',
     function: {
       name: 'read_rule',
-      description: 'Read one Claude-style rule document by name.',
+      description: 'Read one rule document by name.',
       parameters: {
         type: 'object',
         properties: {
@@ -478,7 +478,7 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
     type: 'function',
     function: {
       name: 'list_output_styles',
-      description: 'List built-in and Claude-compatible output styles available to RoyCode.',
+      description: 'List built-in and locally available output styles.',
       parameters: {
         type: 'object',
         properties: {},
@@ -658,7 +658,7 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
     type: 'function',
     function: {
       name: 'list_commands',
-      description: 'List local Claude-style slash commands available in this workspace.',
+      description: 'List local slash commands available in this workspace.',
       parameters: {
         type: 'object',
         properties: {},
@@ -669,7 +669,7 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
     type: 'function',
     function: {
       name: 'read_command',
-      description: 'Read one local Claude-style slash command document by name.',
+      description: 'Read one local slash command document by name.',
       parameters: {
         type: 'object',
         properties: {
@@ -683,7 +683,7 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
     type: 'function',
     function: {
       name: 'list_agents',
-      description: 'List local Claude-style subagents available in the current workspace.',
+      description: 'List local subagents available in the current workspace.',
       parameters: {
         type: 'object',
         properties: {},
@@ -694,7 +694,7 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
     type: 'function',
     function: {
       name: 'read_agent',
-      description: 'Read one local Claude-style subagent definition by name.',
+      description: 'Read one local subagent definition by name.',
       parameters: {
         type: 'object',
         properties: {
@@ -709,7 +709,7 @@ const TOOL_DEFINITIONS: FunctionToolDefinition[] = [
     function: {
       name: 'skill',
       description:
-        'Invoke a Claude-style local skill or slash command. Use this when a known workflow or "/something" command matches the user request.',
+        'Invoke a local skill or slash command. Use this when a known workflow or "/something" command matches the user request.',
       parameters: {
         type: 'object',
         properties: {

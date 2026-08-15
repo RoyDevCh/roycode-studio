@@ -1,5 +1,5 @@
 ---
-description: Diagnose a RoyCode or Claude-style issue by inspecting logs, settings, commands, and recent behavior.
+description: Diagnose a RoyCode issue by inspecting logs, settings, commands, and recent behavior.
 allowed-tools:
   - Read
   - Grep

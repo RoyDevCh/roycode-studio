@@ -1,16 +1,16 @@
 ---
-description: Create or update Claude-style keybindings.json safely without overwriting unrelated bindings.
+description: Create or update keybindings.json safely without overwriting unrelated bindings.
 allowed-tools:
   - Read
   - Write
   - Edit
-when_to_use: Use when the user wants to customize Claude-style keybindings or inspect an existing keybindings.json file.
+when_to_use: Use when the user wants to customize keybindings or inspect an existing keybindings.json file.
 argument-hint: "[binding change request]"
 user-invocable: true
 ---
 # Keybindings
 
-Update Claude-style keybindings carefully.
+Update keybindings carefully.
 
 ## Workflow
 

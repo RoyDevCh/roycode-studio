@@ -8,7 +8,7 @@ RoyCode is intentionally split into:
 
 - a shared local backend/runtime
 - multiple user surfaces on top of that runtime
-- a Claude Code compatibility layer for `.claude` workflows, skills, commands, agents, rules, and memory
+- a compatibility layer for `.claude`-layout workflows, skills, commands, agents, rules, and memory
 
 The CLI/TUI is the most feature-complete surface and should be treated as the primary product core.
 
@@ -120,7 +120,7 @@ Main responsibilities:
 - session status rendering
 - prompt execution
 - session persistence
-- Claude-style local workflow commands
+- local workflow commands
 
 Major internal areas:
 
@@ -276,9 +276,9 @@ Responsibilities:
 - stage/unstage
 - commit
 
-## 10. Claude Compatibility Layer
+## 10. Local Compatibility Layer
 
-### `server/claudeCompat.ts`
+### `server/localCompat.ts`
 
 Responsibilities:
 
@@ -749,7 +749,7 @@ Recommended validation flow after feature work:
 
 These areas are intentionally local approximations, not official parity:
 
-- official Anthropic auth/OAuth flows
+- official vendor auth/OAuth flows
 - official hosted registry/marketplace
 - official remote bridge cloud layer
 - official remote feature-flag and experiment services
@@ -757,8 +757,8 @@ These areas are intentionally local approximations, not official parity:
 
 Treat RoyCode as:
 
-- a strong local Claude-style companion
-- not a 1:1 clone of Anthropic’s private production environment
+- a strong local terminal-first companion
+- not a 1:1 clone of any single vendor’s private production environment
 
 ## 25. Recommended Next Development Areas
 

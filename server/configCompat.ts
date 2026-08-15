@@ -289,7 +289,7 @@ const CONFIG_HANDLERS: ConfigHandler[] = [
   },
   {
     key: 'permissions.defaultMode',
-    description: 'Claude-style permission preset: workspace, safe, or full.',
+    description: 'Permission preset: workspace, safe, or full.',
     type: 'enum',
     options: ['workspace', 'safe', 'full'],
     aliases: ['permissions.default-mode'],

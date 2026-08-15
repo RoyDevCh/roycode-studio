@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Personal desktop and web coding workspace inspired by Codex and Claude Code.",
+  "description": "Personal desktop and web coding workspace for multi-model coding agents.",
   "author": "Roy",
   "main": "desktop/main.cjs",
   "bin": {

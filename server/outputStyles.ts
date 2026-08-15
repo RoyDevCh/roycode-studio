@@ -1,11 +1,11 @@
-import { getLocalOutputStyle, listLocalOutputStyles } from './claudeCompat.js'
+import { getLocalOutputStyle, listLocalOutputStyles } from './localCompat.js'
 import { listPluginOutputStyles } from './pluginRuntime.js'
 
 export type OutputStyleConfig = {
   name: string
   description: string
   prompt: string
-  source: 'built-in' | 'workspace-claude' | 'user-claude' | 'plugin'
+  source: 'built-in' | 'workspace' | 'user' | 'plugin'
   keepCodingInstructions?: boolean
 }
 

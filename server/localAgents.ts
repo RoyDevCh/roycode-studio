@@ -8,11 +8,11 @@ import {
   type CompatCommandDocument,
 } from './commandCompat.js'
 
-const USER_CLAUDE_AGENTS_DIR = process.env.ROYCODE_CLAUDE_AGENTS_DIR
+const USER_COMPAT_AGENTS_DIR = process.env.ROYCODE_CLAUDE_AGENTS_DIR
   ? path.resolve(process.env.ROYCODE_CLAUDE_AGENTS_DIR)
   : path.join(os.homedir(), '.claude', 'agents')
 
-export type LocalAgentSource = 'workspace-claude' | 'user-claude'
+export type LocalAgentSource = 'workspace' | 'user'
 
 export type LocalAgentDefinition = {
   name: string
@@ -140,8 +140,8 @@ function buildAgentRoots(
 ): Array<{ rootPath: string; source: LocalAgentSource }> {
   const roots: Array<{ rootPath: string; source: LocalAgentSource }> = [
     {
-      rootPath: USER_CLAUDE_AGENTS_DIR,
-      source: 'user-claude',
+      rootPath: USER_COMPAT_AGENTS_DIR,
+      source: 'user',
     },
   ]
 
@@ -159,7 +159,7 @@ function buildAgentRoots(
       while (true) {
         roots.push({
           rootPath: path.join(current, '.claude', 'agents'),
-          source: 'workspace-claude',
+          source: 'workspace',
         })
         if (current === normalizedRoot) {
           break
@@ -173,7 +173,7 @@ function buildAgentRoots(
     } else {
       roots.push({
         rootPath: path.join(normalizedRoot, '.claude', 'agents'),
-        source: 'workspace-claude',
+        source: 'workspace',
       })
     }
   }
@@ -251,7 +251,7 @@ async function loadLocalAgentDocuments(
   workspaceRoot?: string,
   cwd = '.',
 ): Promise<LocalAgentDefinition[]> {
-  await mkdir(USER_CLAUDE_AGENTS_DIR, { recursive: true })
+  await mkdir(USER_COMPAT_AGENTS_DIR, { recursive: true })
   const deduped = new Map<string, LocalAgentDefinition>()
 
   for (const root of buildAgentRoots(workspaceRoot, cwd)) {
